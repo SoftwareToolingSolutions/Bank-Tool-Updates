@@ -1,0 +1,8 @@
+2.1.0
+Major and minor bugs fixed
+Added instructions for the update process (Help > How to update)
+Smarter learning: account numbers are remembered too (MOB/SELFFT/9200..., XXXX3508)
+Learns from entries already in Tally - the latest entry wins
+Pop-up messages stay inside the screen on wide sheets
+Smooth animation when switching sheets, incl. sheet tabs
+Home dashboard fits your screen automatically
