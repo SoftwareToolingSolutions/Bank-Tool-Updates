@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.1.0"
+Public Const APP_VERSION As String = "2.1.1"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -51,7 +51,7 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Major and minor bugs fixed|Added instructions for the update process (Help > How to update)|" & _
+Private Const WHATS_NEW As String = "Home dashboard now fills your screen (bigger, about 125%)|Major and minor bugs fixed|Added instructions for the update process (Help > How to update)|" & _
     "Smarter learning: account numbers are remembered too (e.g. MOB/SELFFT/9200.. or XXXX3508)|" & _
     "Learns from the entries already in Tally - corrections you made in Tally are picked up, the latest entry wins|" & _
     "Learn from posted rows now tells you what was learned and what was skipped (and why)|" & _
@@ -2984,7 +2984,7 @@ Private Sub FitHome()
     ev = Application.EnableEvents
     Application.EnableEvents = False
     ActiveWindow.ScrollColumn = 1: ActiveWindow.ScrollRow = 1
-    ws.Range("A1:AX1").Select
+    ws.Range("A1:AS1").Select
     ActiveWindow.Zoom = True
     If ActiveWindow.Zoom > 175 Then ActiveWindow.Zoom = 175
     If ActiveWindow.Zoom < 70 Then ActiveWindow.Zoom = 70
