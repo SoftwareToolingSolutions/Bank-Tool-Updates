@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.1.1"
+Public Const APP_VERSION As String = "2.2.0"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -22,6 +22,9 @@ Private Const COL_REF As Long = 8
 Private Const COL_TXN As Long = 9
 Private Const COL_STATUS As Long = 10
 Private Const COL_NOTE As Long = 11
+Private Const COL_Q As Long = 12          ' hidden: match quality 3 green / 2 yellow / 1 red
+Private Const SHEET_PW As String = "postify"
+Private Const LAYOUT_TAG As String = "2.2.0"
 
 Private Const CLR_OK As Long = 13561798     ' light green
 Private Const CLR_ERR As Long = 13551615    ' light red
@@ -51,13 +54,9 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Home dashboard now fills your screen (bigger, about 125%)|Major and minor bugs fixed|Added instructions for the update process (Help > How to update)|" & _
-    "Smarter learning: account numbers are remembered too (e.g. MOB/SELFFT/9200.. or XXXX3508)|" & _
-    "Learns from the entries already in Tally - corrections you made in Tally are picked up, the latest entry wins|" & _
-    "Learn from posted rows now tells you what was learned and what was skipped (and why)|" & _
-    "Messages always stay inside the visible screen, even on wide sheets|" & _
-    "Smooth animation when you switch sheets, including the sheet tabs (Settings etc.)|" & _
-    "The Home dashboard fits your screen automatically"
+Private Const WHATS_NEW As String = "Minor bug fixes (Needs review count on Home, orange rows on Change Ledger)|" & _
+    "Cells with formulas are now locked, so the dashboard cannot be broken by an accidental edit|" & _
+    "New opening animation, a colour key on Entries and Change Ledger, rows that grow to fit long narrations and smoother page changes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -153,6 +152,7 @@ End Function
 Private Sub SetStatus(ws As Worksheet, ByVal r As Long, ByVal msg As String, ByVal clr As Long)
     ws.Cells(r, COL_STATUS).Value = msg
     ws.Cells(r, COL_STATUS).Interior.Color = clr
+    FitRow ws, r
 End Sub
 
 '---------------- XML building ----------------
@@ -1641,6 +1641,15 @@ Private Sub FillMatch(ws As Worksheet, ByVal r As Long, ByVal bank As String)
     ws.Cells(r, COL_NOTE).Value = note
     ws.Cells(r, COL_NOTE).Interior.Color = clr
     ws.Cells(r, COL_PARTY).Interior.Color = clr
+    ws.Cells(r, COL_Q).Value = q
+    FitRow ws, r
+End Sub
+
+' Row grows to show wrapped narration / status / note
+Private Sub FitRow(ws As Object, ByVal r As Long)
+    On Error Resume Next
+    ws.Rows(r).AutoFit
+    If ws.Rows(r).RowHeight < 16 Then ws.Rows(r).RowHeight = 16
 End Sub
 
 '---------------- Statement parsing ----------------
@@ -2087,7 +2096,8 @@ Private Function FetchBankVouchers(ByVal bank As String, ByVal dFrom As Date, By
         Set nd = vn.SelectSingleNode("GUID"): If Not nd Is Nothing Then vguid = Trim$(nd.Text)
         If vguid = "" Then vguid = CStr(vn.getAttribute("REMOTEID") & "")
         hasBank = False: other = "": bankAmt = 0: nLn = 0: multi = False
-        Set lines = vn.SelectNodes("ALLLEDGERENTRIES.LIST|LEDGERENTRIES.LIST")
+        Set lines = vn.SelectNodes("ALLLEDGERENTRIES.LIST")
+        If lines.Length = 0 Then Set lines = vn.SelectNodes("LEDGERENTRIES.LIST")
         For Each ln In lines
             lname = "": lamt = 0
             Set nd = ln.SelectSingleNode("LEDGERNAME"): If Not nd Is Nothing Then lname = Trim$(nd.Text)
@@ -2634,8 +2644,10 @@ Private Function LoadFixCore(ByVal silent As Boolean) As String
             ws.Cells(r, S_STATUS).Value = "This voucher has " & v(9) & " lines of '" & led & "' - change it in Tally"
             nMulti = nMulti + 1
         End If
+        FitRow ws, r
         r = r + 1: n = n + 1
     Next k
+    If lastR >= r Then ws.Range(ws.Rows(r), ws.Rows(lastR)).RowHeight = 16
     Application.ScreenUpdating = True
     LoadFixCore = n & " entr" & IIf(n = 1, "y", "ies") & " of '" & led & "' from " & Format$(dFrom, "dd-mm-yyyy") & " to " & Format$(dTo, "dd-mm-yyyy") & _
         IIf(nMulti > 0, " (" & nMulti & " orange = change in Tally)", "") & "."
@@ -2761,12 +2773,14 @@ End Sub
 Private Sub SetFxStatus(ws As Worksheet, ByVal r As Long, ByVal msg As String, ByVal clr As Long)
     ws.Cells(r, S_STATUS).Value = msg
     ws.Cells(r, S_STATUS).Interior.Color = clr
+    FitRow ws, r
 End Sub
 
 '================ BUTTON (Change Ledger sheet): Update in Tally ================
 Public Sub UpdateLedgerInTally()
     Dim ws As Worksheet, lastR As Long, r As Long, nTodo As Long, newL As String, oldL As String, guid As String
     Dim d As Date, doc As Object, errTxt As String, vn As Object, ln As Object, lines As Object, hit As Object, hitLine As Object
+    Dim nHit2 As Long, hit2 As Object, hitLine2 As Object
     Dim nHit As Long, nd As Object, body As String, resp As String, created As Long, altered As Long
     Dim lineErr As String, nOk As Long, nErr As Long, co As String, sv As String, g As String, amount As Double
     Dim cacheDay As Date, haveCache As Boolean, st As String, agst As Boolean, nVch As Long, vno As String
@@ -2833,14 +2847,22 @@ Public Sub UpdateLedgerInTally()
                     SetFxStatus ws, r, "Invoice with stock items - change it in Tally", CLR_TALLYONLY: nErr = nErr + 1
                     GoTo nextRow
                 End If
-                Set lines = vn.SelectNodes("ALLLEDGERENTRIES.LIST|LEDGERENTRIES.LIST")
-                nHit = 0
-                For Each ln In lines
+                ' invoice-style vouchers carry the same lines in two lists - count each list on its own
+                nHit = 0: nHit2 = 0: Set hit2 = Nothing: Set hitLine2 = Nothing
+                For Each ln In vn.SelectNodes("ALLLEDGERENTRIES.LIST")
                     Set nd = ln.SelectSingleNode("LEDGERNAME")
                     If Not nd Is Nothing Then
                         If StrComp(Trim$(nd.Text), oldL, vbTextCompare) = 0 Then nHit = nHit + 1: Set hit = nd: Set hitLine = ln
                     End If
                 Next ln
+                For Each ln In vn.SelectNodes("LEDGERENTRIES.LIST")
+                    Set nd = ln.SelectSingleNode("LEDGERNAME")
+                    If Not nd Is Nothing Then
+                        If StrComp(Trim$(nd.Text), oldL, vbTextCompare) = 0 Then nHit2 = nHit2 + 1: Set hit2 = nd: Set hitLine2 = ln
+                    End If
+                Next ln
+                If nHit = 0 And nHit2 > 0 Then nHit = nHit2: Set hit = hit2: Set hitLine = hitLine2: nHit2 = 0: Set hit2 = Nothing: Set hitLine2 = Nothing
+                If nHit2 > nHit Then nHit = nHit2
                 If nHit <> 1 Then
                     ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Interior.Color = CLR_TALLYONLY
                     SetFxStatus ws, r, "This voucher has " & nHit & " lines of '" & oldL & "' - change it in Tally", CLR_TALLYONLY: nErr = nErr + 1
@@ -2851,12 +2873,18 @@ Public Sub UpdateLedgerInTally()
                 For Each nd In hitLine.SelectNodes("BILLALLOCATIONS.LIST/BILLTYPE")
                     If InStr(1, nd.Text, "Agst", vbTextCompare) > 0 Then agst = True
                 Next nd
+                If Not hitLine2 Is Nothing Then
+                    For Each nd In hitLine2.SelectNodes("BILLALLOCATIONS.LIST/BILLTYPE")
+                        If InStr(1, nd.Text, "Agst", vbTextCompare) > 0 Then agst = True
+                    Next nd
+                End If
                 If agst Then
                     SetFxStatus ws, r, "Settled against a bill (Agst Ref) of '" & oldL & "' - change it in Tally", CLR_TALLYONLY: nErr = nErr + 1
                     GoTo nextRow
                 End If
                 ' replace the ledger everywhere it names this party
                 hit.Text = newL
+                If Not hit2 Is Nothing Then hit2.Text = newL
                 For Each nd In vn.SelectNodes(".//PARTYLEDGERNAME|.//PAYMENTFAVOURING|.//BANKPARTYNAME")
                     If StrComp(Trim$(nd.Text), oldL, vbTextCompare) = 0 Then nd.Text = newL
                 Next nd
@@ -2934,13 +2962,15 @@ End Sub
 
 ' Runs when the file opens (called from ThisWorkbook) and right after an update
 Public Sub AppStartup()
+    Dim was As Boolean
     On Error Resume Next
     SetApp "B7", APP_VERSION
+    was = gNoAnim: gNoAnim = True
     QuietActivate ThisWorkbook.Worksheets("Home")
     OnSheetActivate "Home"
+    gNoAnim = was
     ThisWorkbook.Worksheets("Home").Range("A1").Select
-    RefreshTallyStatus
-    EnsureHelpUpdateGuide
+    StartupWithSplash
     If CStr(AppData().Range("B8").Value) <> APP_VERSION Then
         Application.OnTime Now + TimeSerial(0, 0, 1), "TallyLink.ShowWhatsNew"
     End If
@@ -3030,19 +3060,195 @@ Private Sub CoverRect(ByRef l As Single, ByRef t As Single, ByRef w As Single, B
     h = z.Top + z.Height - t + 40
 End Sub
 
+' Sheet tab clicked: a thin teal line sweeps across the top (no cover, so no white flash)
 Private Sub SheetFadeIn(ws As Object)
-    Dim cov As Object, i As Long, l As Single, t As Single, w As Single, h As Single
+    Dim bar As Object, i As Long, l As Single, t As Single, w As Single, h As Single
     On Error GoTo fin
     CoverRect l, t, w, h
-    Set cov = NewBox(ws, "trn_tab", 1, l, t, w, h, RGB(244, 247, 251))
-    cov.Fill.Transparency = 0
+    w = w - 40
+    Set bar = NewBox(ws, "trn_sweep", 1, l, t, 4, 3, RGB(20, 184, 166))
     Application.ScreenUpdating = True
-    For i = 1 To 6
-        cov.Fill.Transparency = i / 6
-        TransitionPause 0.03
+    For i = 1 To 7
+        bar.Width = w * i / 7
+        TransitionPause 0.018
+    Next i
+    For i = 1 To 4
+        bar.Fill.Transparency = i / 4
+        TransitionPause 0.02
     Next i
 fin:
     DeleteShapes "trn_"
+End Sub
+
+' Make a group of shapes (fill + text) more / less transparent
+Private Sub ShapesAlpha(ByVal prefix As String, ws As Object, ByVal a As Single)
+    Dim shp As Object
+    On Error Resume Next
+    For Each shp In ws.Shapes
+        If Left$(shp.Name, Len(prefix)) = prefix Then
+            If shp.Fill.Visible Then
+                If shp.Name <> prefix & "bg" Then shp.Fill.Transparency = a
+            End If
+            If shp.TextFrame2.HasText Then shp.TextFrame2.TextRange.Font.Fill.Transparency = a
+        End If
+    Next shp
+End Sub
+
+' Opening animation on the dashboard; the start-up work runs while it plays
+Private Sub StartupWithSplash()
+    Dim ws As Object, shp As Object, bar As Object, stp As Object, i As Long, k As Long
+    Dim l As Single, t As Single, w As Single, h As Single, vl As Single, vt As Single, vw As Single, vh As Single
+    Dim cx As Single, cy As Single, tw As Single, msgs As Variant, t0 As Single
+    On Error GoTo plain
+    Set ws = ActiveSheet
+    CoverRect l, t, w, h
+    ViewRect vl, vt, vw, vh
+    cx = vl + vw / 2: cy = vt + vh / 2 - 30
+    Set shp = NewBox(ws, "spl_bg", 1, l, t, w, h, RGB(11, 31, 58))
+    Set shp = NewBox(ws, "spl_logo", 5, cx - 30, cy - 104, 60, 60, RGB(20, 184, 166))
+    shp.Adjustments.Item(1) = 0.22
+    StyleText shp, "P", 30, RGB(255, 255, 255), True, 2
+    shp.TextFrame2.VerticalAnchor = 3
+    Set shp = NewText(ws, "spl_title", cx - 220, cy - 32, 440, 36)
+    StyleText shp, APP_NAME, 26, RGB(255, 255, 255), True, 2
+    Set shp = NewText(ws, "spl_tag", cx - 220, cy + 8, 440, 20)
+    StyleText shp, "Bank statements to Tally, in minutes", 11, RGB(148, 180, 210), False, 2
+    tw = 260
+    Set shp = NewBox(ws, "spl_track", 5, cx - tw / 2, cy + 50, tw, 6, RGB(30, 58, 95))
+    shp.Adjustments.Item(1) = 0.5
+    Set bar = NewBox(ws, "spl_bar", 5, cx - tw / 2, cy + 50, 6, 6, RGB(20, 184, 166))
+    bar.Adjustments.Item(1) = 0.5
+    Set stp = NewText(ws, "spl_step", cx - 220, cy + 64, 440, 18)
+    StyleText stp, "Starting up...", 9, RGB(148, 163, 184), False, 2
+    Set shp = NewText(ws, "spl_ver", cx - 220, cy + 88, 440, 16)
+    StyleText shp, "v" & APP_VERSION, 8, RGB(100, 116, 139), False, 2
+    Application.ScreenUpdating = True
+    t0 = Timer
+    msgs = Array("Starting up...", "Tidying your sheets...", "Checking the connection to Tally...", "Preparing your dashboard...", "Ready")
+    For k = 0 To 4
+        stp.TextFrame2.TextRange.Text = msgs(k)
+        Select Case k
+            Case 1: ApplyLayout220
+                    ProtectFormulaSheets
+            Case 2: RefreshTallyStatus
+            Case 3: EnsureHelpUpdateGuide
+        End Select
+        For i = 1 To 5
+            bar.Width = 6 + (tw - 6) * (k * 5 + i) / 25
+            TransitionPause 0.03
+        Next i
+    Next k
+    Do While Abs(Timer - t0) < 1.2
+        DoEvents
+    Loop
+    For i = 1 To 8
+        ShapesAlpha "spl_", ws, i / 8
+        ws.Shapes("spl_bg").Fill.Transparency = i / 8
+        TransitionPause 0.03
+    Next i
+    DeleteShapes "spl_"
+    Exit Sub
+plain:
+    DeleteShapes "spl_"
+    On Error Resume Next
+    ApplyLayout220
+    ProtectFormulaSheets
+    RefreshTallyStatus
+    EnsureHelpUpdateGuide
+End Sub
+
+' One-time sheet improvements of v2.2.0 (wrap + fit rows, colour keys, Needs review figure)
+Private Sub ApplyLayout220()
+    Dim ws As Worksheet, home As Worksheet, lastR As Long, r As Long, c As Long, q As Long
+    On Error Resume Next
+    If CStr(AppData().Range("B9").Value) = LAYOUT_TAG Then Exit Sub
+    ' Entries
+    Set ws = EntriesSheet()
+    lastR = LastDataRow(ws)
+    ws.Cells(4, COL_Q).Value = "q"
+    ws.Columns(COL_Q).Hidden = True
+    For r = FIRST_ROW To lastR
+        If CellText(ws.Cells(r, COL_NOTE).Value) <> "" And CellText(ws.Cells(r, COL_Q).Value) = "" Then
+            c = ws.Cells(r, COL_NOTE).Interior.Color
+            If c = CLR_OK Then
+                q = 3
+            ElseIf c = CLR_INFO Then
+                q = 2
+            Else
+                q = 1
+            End If
+            ws.Cells(r, COL_Q).Value = q
+        End If
+    Next r
+    With ws.Range(ws.Cells(FIRST_ROW, COL_NARR), ws.Cells(FIRST_ROW + 2499, COL_NARR))
+        .WrapText = True
+    End With
+    ws.Range(ws.Cells(FIRST_ROW, COL_STATUS), ws.Cells(FIRST_ROW + 2499, COL_NOTE)).WrapText = True
+    ws.Range(ws.Cells(FIRST_ROW, 1), ws.Cells(FIRST_ROW + 2499, COL_NOTE)).VerticalAlignment = -4108
+    If lastR >= FIRST_ROW Then ws.Range(ws.Rows(FIRST_ROW), ws.Rows(lastR)).AutoFit
+    ColourKey ws.Range("A3"), "Colour key:", Array( _
+        Array(RGB(34, 197, 94), "Green = sure match"), Array(RGB(234, 179, 8), "Yellow = please check"), _
+        Array(RGB(239, 68, 68), "Red = no match / Suspense / error"), Array(RGB(96, 165, 250), "Blue = already in Tally (skipped)"), _
+        Array(RGB(16, 185, 129), "Status green = posted"))
+    ws.Rows(3).RowHeight = 20
+    ' Change Ledger
+    Set ws = FxSheet()
+    ws.Range(ws.Cells(S_FIRST, S_NARR), ws.Cells(S_FIRST + 2999, S_NARR)).WrapText = True
+    ws.Range(ws.Cells(S_FIRST, S_STATUS), ws.Cells(S_FIRST + 2999, S_STATUS)).WrapText = True
+    ws.Range(ws.Cells(S_FIRST, 1), ws.Cells(S_FIRST + 2999, S_STATUS)).VerticalAlignment = -4108
+    lastR = ws.Cells(ws.Rows.Count, S_DATE).End(xlUp).Row
+    If lastR >= S_FIRST Then ws.Range(ws.Rows(S_FIRST), ws.Rows(lastR)).AutoFit
+    ColourKey ws.Range("A3"), "Load entries > pick the right ledger in the yellow column > Update in Tally.   Colour key:", Array( _
+        Array(RGB(250, 204, 21), "Yellow = choose here"), Array(RGB(249, 115, 22), "Orange = change it in Tally"), _
+        Array(RGB(34, 197, 94), "Green = updated"), Array(RGB(239, 68, 68), "Red = error"))
+    ws.Range("A3").WrapText = True
+    ws.Rows(3).RowHeight = 22
+    ' Home: Needs review = yellow + red rows not posted yet, plus rows with errors (red figure)
+    Set home = ThisWorkbook.Worksheets("Home")
+    home.Unprotect SHEET_PW
+    With home.Range("K13")
+        .Formula = "=SUMPRODUCT((Entries!$A$5:$A$5000<>"""")*(Entries!$J$5:$J$5000="""")*(Entries!$L$5:$L$5000>0)*(Entries!$L$5:$L$5000<3))" & _
+                   "+SUMPRODUCT((Entries!$A$5:$A$5000<>"""")*ISNUMBER(SEARCH(""error"",Entries!$J$5:$J$5000)))"
+        .Font.Color = RGB(220, 38, 38)
+        .NumberFormat = "#,##0;-#,##0;[Color10]0"
+    End With
+    home.Range("K12:Q12").Interior.Color = RGB(220, 38, 38)
+    home.Range("K15").Value = "yellow + red rows and errors - please check"
+    SetApp "A9", "Layout version"
+    SetApp "B9", LAYOUT_TAG
+End Sub
+
+' "Colour key:  [] Green = ...   [] Yellow = ..." with coloured squares
+Private Sub ColourKey(cel As Range, ByVal lead As String, ByVal items As Variant)
+    Dim txt As String, i As Long, pos() As Long, it As Variant
+    On Error Resume Next
+    ReDim pos(0 To UBound(items))
+    txt = lead & "   "
+    For i = 0 To UBound(items)
+        pos(i) = Len(txt) + 1
+        txt = txt & ChrW(&H25A0) & " " & items(i)(1) & "     "
+    Next i
+    cel.Value = txt
+    cel.Font.Italic = False
+    cel.Font.Size = 9
+    cel.Font.Color = RGB(100, 116, 139)
+    cel.Characters(1, Len(lead)).Font.Bold = True
+    For i = 0 To UBound(items)
+        cel.Characters(pos(i), 1).Font.Color = items(i)(0)
+        cel.Characters(pos(i), 1).Font.Size = 12
+    Next i
+End Sub
+
+' Formula cells are locked: the dashboard sheet is protected (macros can still update it)
+Private Sub ProtectFormulaSheets()
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets("Home")
+    If ws Is Nothing Then Exit Sub
+    ws.Unprotect SHEET_PW
+    ws.Cells.Locked = True
+    ws.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
+    ws.EnableSelection = 0
 End Sub
 
 ' Quick check whether Tally answers (shown on Home)
@@ -3089,41 +3295,51 @@ plain:
     DeleteShapes "trn_"
 End Sub
 
-' Smooth page change: fade the current page out, open the new one under a cover, fade it in (~0.35 s)
+' Smooth page change: a soft navy veil with an "Opening ..." pill, switch underneath, veil fades away
 Private Sub PageTransition(src As Object, dst As Object, ByVal cellAddr As String)
-    Dim cov As Object, lab As Object, i As Long, steps As Long, bgc As Long
+    Dim cov As Object, pill As Object, i As Long, steps As Long, veil As Single
     Dim l As Single, t As Single, w As Single, h As Single, vl As Single, vt As Single, vw As Single, vh As Single
     On Error GoTo fin
-    bgc = RGB(244, 247, 251)
-    steps = 6
+    steps = 5: veil = 0.55
     Application.ScreenUpdating = True
-    ' 1) fade out the current page
+    ' 1) dim the current page
     CoverRect l, t, w, h
     ViewRect vl, vt, vw, vh
-    Set cov = NewBox(src, "trn_out", 1, l, t, w, h, bgc)
+    Set cov = NewBox(src, "trn_out", 1, l, t, w, h, RGB(11, 31, 58))
     cov.Fill.Transparency = 1
-    Set lab = NewText(src, "trn_lab", vl, vt + vh / 2 - 40, vw, 30)
-    StyleText lab, "Opening " & dst.Name & "...", 13, RGB(20, 184, 166), True, 2
-    lab.TextFrame2.TextRange.Font.Fill.Transparency = 1
+    Set pill = NewBox(src, "trn_pill", 5, vl + vw / 2 - 110, vt + vh / 2 - 22, 220, 40, RGB(11, 31, 58))
+    pill.Adjustments.Item(1) = 0.5
+    StyleText pill, "Opening " & dst.Name & "...", 11, RGB(255, 255, 255), True, 2
+    pill.TextFrame2.VerticalAnchor = 3
+    pill.Fill.Transparency = 1
+    pill.TextFrame2.TextRange.Font.Fill.Transparency = 1
     For i = 1 To steps
-        cov.Fill.Transparency = 1 - i / steps
-        lab.TextFrame2.TextRange.Font.Fill.Transparency = 1 - i / steps
-        TransitionPause 0.025
+        cov.Fill.Transparency = 1 - (1 - veil) * i / steps
+        pill.Fill.Transparency = 1 - i / steps
+        pill.TextFrame2.TextRange.Font.Fill.Transparency = 1 - i / steps
+        TransitionPause 0.02
     Next i
-    ' 2) open the new page behind a full cover
+    ' 2) switch page underneath the same veil
     Application.ScreenUpdating = False
     QuietActivate dst
     dst.Range(cellAddr).Select
     CoverRect l, t, w, h
-    Set cov = NewBox(dst, "trn_in", 1, l, t, w, h, bgc)
-    cov.Fill.Transparency = 0
+    ViewRect vl, vt, vw, vh
+    Set cov = NewBox(dst, "trn_in", 1, l, t, w, h, RGB(11, 31, 58))
+    cov.Fill.Transparency = veil
+    Set pill = NewBox(dst, "trn_badge", 5, vl + vw / 2 - 110, vt + vh / 2 - 22, 220, 40, RGB(11, 31, 58))
+    pill.Adjustments.Item(1) = 0.5
+    StyleText pill, "Opening " & dst.Name & "...", 11, RGB(255, 255, 255), True, 2
+    pill.TextFrame2.VerticalAnchor = 3
     DeleteShapes "trn_out"
-    DeleteShapes "trn_lab"
+    DeleteShapes "trn_pill"
     Application.ScreenUpdating = True
-    ' 3) fade the new page in
-    For i = 1 To steps
-        cov.Fill.Transparency = i / steps
-        TransitionPause 0.03
+    ' 3) lift the veil
+    For i = 1 To 6
+        cov.Fill.Transparency = veil + (1 - veil) * i / 6
+        pill.Fill.Transparency = i / 6
+        pill.TextFrame2.TextRange.Font.Fill.Transparency = i / 6
+        TransitionPause 0.025
     Next i
 fin:
     DeleteShapes "trn_"

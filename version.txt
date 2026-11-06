@@ -1,2 +1,4 @@
-2.1.1
-Home dashboard now fills your screen (bigger, about 125%)
+2.2.0
+Minor bug fixes
+Cells with formulas are now locked, so the dashboard cannot be broken by an accidental edit
+Opening animation, colour key, rows that fit long narrations, smoother page changes
