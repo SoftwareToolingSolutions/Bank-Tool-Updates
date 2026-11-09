@@ -1,4 +1,4 @@
-2.2.0
+2.2.1
+New: Bank balance check - see at a glance whether your Tally bank balance matches your bank statement, for every bank account
+Find duplicates now checks the balance first - nothing is suggested for deletion when Tally matches your statement
 Minor bug fixes
-Cells with formulas are now locked, so the dashboard cannot be broken by an accidental edit
-Opening animation, colour key, rows that fit long narrations, smoother page changes

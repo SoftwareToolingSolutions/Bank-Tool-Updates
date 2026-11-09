@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.2.0"
+Public Const APP_VERSION As String = "2.2.1"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -25,6 +25,11 @@ Private Const COL_NOTE As Long = 11
 Private Const COL_Q As Long = 12          ' hidden: match quality 3 green / 2 yellow / 1 red
 Private Const SHEET_PW As String = "postify"
 Private Const LAYOUT_TAG As String = "2.2.0"
+Private Const BB_SHEET As String = "Bank Balances"
+Private Const BB_FIRST As Long = 6
+Private Const BB_NOTE As String = "* Statement balance is as per the bank statement provided by you (balance after the last transaction imported). " & _
+    "Tally balance is read from your Tally company for the same date. For reference only - please verify with your bank. " & _
+    "Postify Bank does not verify these figures and accepts no liability for them."
 
 Private Const CLR_OK As Long = 13561798     ' light green
 Private Const CLR_ERR As Long = 13551615    ' light red
@@ -54,9 +59,9 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Minor bug fixes (Needs review count on Home, orange rows on Change Ledger)|" & _
-    "Cells with formulas are now locked, so the dashboard cannot be broken by an accidental edit|" & _
-    "New opening animation, a colour key on Entries and Change Ledger, rows that grow to fit long narrations and smoother page changes"
+Private Const WHATS_NEW As String = "New: Bank balance check - see at a glance whether your bank balance in Tally matches your bank statement, for every bank account (new card on Home + new Bank Balances sheet)|" & _
+    "Find duplicates now checks the balance first: if Tally matches your statement, nothing is suggested for deletion|" & _
+    "Minor bug fixes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -1731,13 +1736,13 @@ Private Function ParseStatement(ByVal arr As Variant, ByRef info As String) As C
     Dim hr As Long, cDate_ As Long, cVal As Long, cNarr As Long, cWd As Long, cDep As Long
     Dim cAmt As Long, cDrCr As Long, cRef As Long, dv As Variant, narr As String
     Dim w As Double, dp As Double, a As Double, sd As String, sd2 As String, ref As String
-    Dim last As Variant, lowNarr As String, filled As Long
+    Dim last As Variant, lowNarr As String, filled As Long, cBal As Long, bal As Double, hasBal As Boolean, sb As String
 
     Set ParseStatement = res
     nR = UBound(arr, 1): nC = UBound(arr, 2)
 
     For i = LBound(arr, 1) To Application.Min(nR, 80)
-        cDate_ = 0: cVal = 0: cNarr = 0: cWd = 0: cDep = 0: cAmt = 0: cDrCr = 0: cRef = 0
+        cDate_ = 0: cVal = 0: cNarr = 0: cWd = 0: cDep = 0: cAmt = 0: cDrCr = 0: cRef = 0: cBal = 0
         For j = LBound(arr, 2) To nC
             h = LCase$(CellText(arr(i, j)))
             h = Replace(h, ".", "")
@@ -1751,7 +1756,7 @@ Private Function ParseStatement(ByVal arr As Variant, ByRef info As String) As C
                         cDate_ = j
                     End If
                 ElseIf HdrMatch(h, "balance") Then
-                    ' ignore
+                    If cBal = 0 And InStr(h, "opening") = 0 Then cBal = j
                 ElseIf HdrMatch(h, "withdraw|debit|paid out|money out") Or h = "dr" Or Left$(h, 3) = "dr " Or Left$(h, 3) = "dr(" Then
                     If cWd = 0 Then cWd = j
                 ElseIf HdrMatch(h, "deposit|credit|paid in|money in") Or h = "cr" Or Left$(h, 3) = "cr " Or Left$(h, 3) = "cr(" Then
@@ -1798,6 +1803,15 @@ Private Function ParseStatement(ByVal arr As Variant, ByRef info As String) As C
         End If
         ref = ""
         If cRef > 0 Then ref = CellText(arr(i, cRef))
+        bal = 0: hasBal = False
+        If cBal > 0 Then
+            If CellText(arr(i, cBal)) <> "" Then
+                bal = ParseAmount(arr(i, cBal), sb)
+                If sb = "D" Then bal = -Abs(bal)
+                If sb = "C" Then bal = Abs(bal)
+                hasBal = True
+            End If
+        End If
 
         If IsEmpty(dv) Then
             ' continuation of previous narration (multi-line PDFs)
@@ -1808,7 +1822,7 @@ Private Function ParseStatement(ByVal arr As Variant, ByRef info As String) As C
                 res.Add last
             End If
         ElseIf (w > 0 Or dp > 0) And InStr(lowNarr, "opening balance") = 0 And InStr(lowNarr, "closing balance") = 0 Then
-            res.Add Array(dv, narr, w, dp, ref)
+            res.Add Array(dv, narr, w, dp, ref, bal, hasBal)
         End If
     Next i
     If res.Count = 0 Then info = "Header row found (row " & hr & ") but no transactions could be read below it."
@@ -1875,6 +1889,7 @@ Public Sub ImportBankStatement()
     Dim ws As Worksheet, r As Long, rec As Variant, key As String, keys As Object, i As Long
     Dim nNew As Long, nDup As Long, nHi As Long, nMid As Long, nLow As Long, clr As Long, dupHit As Boolean
     Dim nTally As Long, tinfo As String, dMin As Date, nHist As Long
+    Dim dMax As Date, cBalv As Double, haveBal As Boolean, ascending As Boolean, k As Long, bmsg As String
 
     Set ws = EntriesSheet()
     If ThisWorkbook.Worksheets("Ledgers").Range("A2").Value = "" Then
@@ -1970,13 +1985,33 @@ Public Sub ImportBankStatement()
     ProgressUpdate 0.93, "Checking Tally for entries that already exist..."
     nTally = CheckRowsAgainstTally(True, tinfo)
     If nTally < 0 Then tinfo = "Could not check Tally for existing entries (" & tinfo & ") - it will be checked again when you post." Else tinfo = nTally & " row(s) already exist in Tally (blue) and will be skipped."
+    ' bank balance check (statement balance as per the document provided by the user)
+    ProgressUpdate 0.97, "Comparing the bank balance with Tally..."
+    rec = recs(1): dMax = CDate(rec(0))
+    rec = recs(recs.Count): ascending = (dMax <= CDate(rec(0)))
+    For k = 1 To recs.Count
+        rec = recs(k)
+        If CDate(rec(0)) > dMax Then dMax = CDate(rec(0))
+    Next k
+    If ascending Then
+        For k = recs.Count To 1 Step -1
+            rec = recs(k)
+            If rec(6) Then cBalv = rec(5): haveBal = True: Exit For
+        Next k
+    Else
+        For k = 1 To recs.Count
+            rec = recs(k)
+            If rec(6) Then cBalv = rec(5): haveBal = True: Exit For
+        Next k
+    End If
+    bmsg = BankStmtBalance(CStr(bank), dMax, cBalv, haveBal, Mid$(CStr(f), InStrRev(CStr(f), "\") + 1))
     Application.ScreenUpdating = True
     ProgressDone "Import finished"
     QuietActivate ws
     LogAct "Import statement", Mid$(CStr(f), InStrRev(CStr(f), "\") + 1) & " -> " & nNew & " rows (" & nHi & " green, " & nMid & " yellow, " & nLow & " red)", nNew
     Notify nNew & " transactions imported" & IIf(nDup > 0, "  (" & nDup & " already on the sheet)", "") & vbCrLf & _
         "Green " & nHi & "   -   Yellow " & nMid & "   -   Red " & nLow & vbCrLf & tinfo & vbCrLf & _
-        "Review yellow and red rows, then Post to Tally.", "ok"
+        "Review yellow and red rows, then Post to Tally." & IIf(bmsg <> "", vbCrLf & bmsg, ""), "ok"
 End Sub
 
 '================ BUTTON: Re-match ledgers ================
@@ -2329,7 +2364,8 @@ Public Sub FindDuplicatesInTally()
     Dim i As Long, j As Long, vi As Variant, vj As Variant, grp() As Long, nG As Long, rr As Long, win As Long
     Dim r As Long, lastR As Long, mine As Boolean, nStmt As Long, gi As Long, members As String, m As Variant
     Dim nVch As Long, nMine As Long, extra As Long, d0 As Date, isIn As Boolean, amount As Double, sug As String
-    Dim narrPosted As String, dRow As Date, nDel As Long
+    Dim narrPosted As String, dRow As Date, nDel As Long, bws As Worksheet, br As Long, tb As Double, okB As Boolean
+    Dim balNote As String, balOK As Boolean, rb As String
 
     Set ws = EntriesSheet()
     lastR = LastDataRow(ws)
@@ -2351,6 +2387,32 @@ Public Sub FindDuplicatesInTally()
     If VarType(dTo) = vbBoolean Then Exit Sub
     dFrom = ParseDateCell(dFrom): dTo = ParseDateCell(dTo)
     If IsEmpty(dFrom) Or IsEmpty(dTo) Then MsgBox "Please enter dates like 01-04-2026.", vbExclamation: Exit Sub
+
+    ' 1) balance first: if Tally matches the statement, same-amount entries are real
+    Set bws = BankSheet()
+    br = BBRow(bws, CStr(bank), False)
+    If br > 0 Then
+        If IsNumeric(bws.Cells(br, 3).Value) And CellText(bws.Cells(br, 3).Value) <> "" Then
+            ProgressShow "Finding duplicates", "Comparing the balance with your statement..."
+            BBCheckRow bws, br
+            ProgressHide
+            RefreshBankSummary
+            If Left$(CellText(bws.Cells(br, 6).Value), 1) = ChrW(&H2714) Then
+                balOK = True
+                balNote = "Tally balance matches the statement on " & Format$(bws.Cells(br, 2).Value, "dd-mm-yyyy") & " *"
+                If MsgBox("The balance of '" & bank & "' in Tally matches your bank statement on " & Format$(bws.Cells(br, 2).Value, "dd-mm-yyyy") & "." & vbCrLf & vbCrLf & _
+                    "So entries with the same amount are real transactions - there is nothing to delete." & vbCrLf & vbCrLf & _
+                    "Show same-amount entries anyway (for information only)?" & vbCrLf & vbCrLf & _
+                    "* as per the bank statement provided by you", vbYesNo + 256 + vbInformation, "Find duplicates") <> vbYes Then
+                    LogAct "Find duplicates", "'" & bank & "': balance matches the statement - nothing to delete", 0
+                    Exit Sub
+                End If
+            ElseIf CellText(bws.Cells(br, 5).Value) <> "" Then
+                balNote = "Tally differs from the statement by " & Format$(bws.Cells(br, 5).Value, "#,##0.00") & " on " & Format$(bws.Cells(br, 2).Value, "dd-mm-yyyy") & " *"
+            End If
+        End If
+    End If
+    If balNote = "" Then balNote = "Balance not compared (no statement balance for this bank yet)"
 
     ProgressShow "Finding duplicates", "Reading '" & bank & "' vouchers from Tally..."
     Set vc = FetchBankVouchers(CStr(bank), CDate(dFrom), CDate(dTo), False, info)
@@ -2383,7 +2445,10 @@ Public Sub FindDuplicatesInTally()
     rp.Name = "Tally Duplicates"
     rp.Range("A1").Value = "Possible duplicate vouchers in '" & bank & "'  (" & info & ")"
     rp.Range("A1").Font.Bold = True
-    rp.Range("A2").Value = "Same amount and direction within " & win & " day(s). 'Made by this file' = narration matches a row posted from the Entries sheet. Delete the suggested ones in Tally: Day Book > select voucher > Alt+D."
+    rp.Range("A2").Value = "Same amount and direction within " & win & " day(s), more copies in Tally than in the statement. 'Made by this file' = narration matches a row posted from the Entries sheet. Delete the suggested ones in Tally: Day Book > select voucher > Alt+D."
+    rp.Range("A3").Value = "Bank balance: " & balNote & IIf(InStr(balNote, "*") > 0, "    (* as per the bank statement provided by you - verify with your bank)", "")
+    rp.Range("A3").Font.Italic = True
+    rp.Range("A3").Font.Color = IIf(balOK, RGB(5, 150, 105), RGB(180, 83, 9))
     rp.Range("A4:J4").Value = Array("Group", "Date", "In/Out", "Amount", "Voucher Type", "Voucher No", "Other ledger", "Narration", "Made by this file?", "Suggestion")
     rp.Range("A4:J4").Font.Bold = True
     rp.Range("A4:J4").Interior.Color = 15652797
@@ -2399,7 +2464,9 @@ Public Sub FindDuplicatesInTally()
         isIn = vi(1): amount = vi(2)
         nStmt = 0
         For r = FIRST_ROW To lastR
-            If HasRowDate(ws, r) Then
+            rb = CellText(ws.Cells(r, COL_BANK).Value)
+            If rb = "" Then rb = SettingValue("DefaultBank")
+            If HasRowDate(ws, r) And StrComp(rb, CStr(bank), vbTextCompare) = 0 Then
                 If Abs(DateDiff("d", RowDate(ws, r), vi(0))) <= win Then
                     If isIn And Abs(Amt(ws.Cells(r, COL_IN).Value) - amount) < 0.005 Then nStmt = nStmt + 1
                     If Not isIn And Abs(Amt(ws.Cells(r, COL_OUT).Value) - amount) < 0.005 Then nStmt = nStmt + 1
@@ -2421,7 +2488,11 @@ Public Sub FindDuplicatesInTally()
                     End If
                 Next r
                 sug = ""
-                If mine And nDel < extra Then sug = "DELETE (duplicate made by this file)": nDel = nDel + 1
+                If balOK Then
+                    sug = "Balance matches - probably a real transaction"
+                ElseIf mine And nDel < extra Then
+                    sug = "DELETE (duplicate made by this file)": nDel = nDel + 1
+                End If
                 rp.Cells(rr, 1).Value = gi
                 rp.Cells(rr, 2).Value = vi(0): rp.Cells(rr, 2).NumberFormat = "dd-mm-yyyy"
                 rp.Cells(rr, 3).Value = IIf(vi(1), "In", "Out")
@@ -2432,10 +2503,10 @@ Public Sub FindDuplicatesInTally()
                 rp.Cells(rr, 8).Value = vi(6)
                 rp.Cells(rr, 9).Value = IIf(mine, "Yes", "No")
                 rp.Cells(rr, 10).Value = sug
-                If sug <> "" Then rp.Range(rp.Cells(rr, 1), rp.Cells(rr, 10)).Interior.Color = CLR_ERR
+                If Left$(sug, 6) = "DELETE" Then rp.Range(rp.Cells(rr, 1), rp.Cells(rr, 10)).Interior.Color = CLR_ERR
                 rr = rr + 1
             Next m
-            If nDel < extra Then
+            If nDel < extra And Not balOK Then
                 rp.Cells(rr - 1, 10).Value = rp.Cells(rr - 1, 10).Value & IIf(rp.Cells(rr - 1, 10).Value = "", "", " / ") & _
                     "Group has " & extra - nDel & " more extra voucher(s) - check which one to delete"
             End If
@@ -2990,7 +3061,7 @@ Public Sub OnSheetActivate(ByVal shName As String)
     If shName = "Home" Then FitHome
     If gNoAnim Or gProgOn Then Exit Sub
     Select Case shName
-        Case "Home", "Entries", "Change Ledger", "Activity Log", "Settings", "Ledgers", "Rules", "Learned", "Help"
+        Case "Home", "Entries", "Change Ledger", "Activity Log", "Settings", "Ledgers", "Rules", "Learned", "Help", BB_SHEET
             SheetFadeIn ActiveSheet
     End Select
 End Sub
@@ -3129,6 +3200,7 @@ Private Sub StartupWithSplash()
         stp.TextFrame2.TextRange.Text = msgs(k)
         Select Case k
             Case 1: ApplyLayout220
+                    ApplyLayout221
                     ProtectFormulaSheets
             Case 2: RefreshTallyStatus
             Case 3: EnsureHelpUpdateGuide
@@ -3152,6 +3224,7 @@ plain:
     DeleteShapes "spl_"
     On Error Resume Next
     ApplyLayout220
+    ApplyLayout221
     ProtectFormulaSheets
     RefreshTallyStatus
     EnsureHelpUpdateGuide
@@ -3755,4 +3828,303 @@ Public Sub ShowUpdateGuide()
     GoSheet "Help", "B" & r
     On Error Resume Next
     ActiveWindow.ScrollRow = IIf(r > 2, r - 1, 1)
+End Sub
+
+'==============================================================
+'  BANK BALANCE CHECK  (Tally vs the statement provided by the user)
+'==============================================================
+Private Function FyStartOf(ByVal d As Date) As Date
+    If Month(d) >= 4 Then FyStartOf = DateSerial(Year(d), 4, 1) Else FyStartOf = DateSerial(Year(d) - 1, 4, 1)
+End Function
+
+' Bank ledger balance in Tally at the end of day d. Positive = money in the account (Dr), minus = overdrawn.
+Private Function TallyBankBalance(ByVal bank As String, ByVal d As Date, ByRef ok As Boolean) As Double
+    Dim req As String, resp As String, co As String, sv As String, doc As Object, re As Object, ln As Object, nd As Object, nm As String
+    ok = False
+    On Error GoTo fin
+    co = SettingValue("CompanyName")
+    sv = "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+    If co <> "" Then sv = sv & "<SVCURRENTCOMPANY>" & XmlEsc(co) & "</SVCURRENTCOMPANY>"
+    sv = sv & "<SVFROMDATE>" & TallyDateStr(FyStartOf(d)) & "</SVFROMDATE><SVTODATE>" & TallyDateStr(d) & "</SVTODATE>"
+    req = "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>XLBankBal</ID></HEADER>" & _
+          "<BODY><DESC><STATICVARIABLES>" & sv & "</STATICVARIABLES><TDL><TDLMESSAGE>" & _
+          "<COLLECTION NAME=""XLBankBal"" ISMODIFY=""No""><TYPE>Ledger</TYPE><FETCH>NAME,CLOSINGBALANCE</FETCH></COLLECTION>" & _
+          "</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
+    If Not PostXml(req, resp) Then Exit Function
+    Set re = CreateObject("VBScript.RegExp")
+    re.Global = True
+    re.Pattern = "&#([0-8]|1[124-9]|2[0-9]|3[01]);"
+    resp = re.Replace(resp, "")
+    Set doc = CreateObject("MSXML2.DOMDocument.6.0")
+    doc.async = False
+    If Not doc.LoadXML(resp) Then Exit Function
+    For Each ln In doc.SelectNodes("//LEDGER")
+        nm = CStr(ln.getAttribute("NAME") & "")
+        If nm = "" Then
+            Set nd = ln.SelectSingleNode("NAME"): If Not nd Is Nothing Then nm = nd.Text
+        End If
+        If StrComp(Trim$(nm), Trim$(bank), vbTextCompare) = 0 Then
+            Set nd = ln.SelectSingleNode("CLOSINGBALANCE")
+            If Not nd Is Nothing Then TallyBankBalance = -Val(Replace(nd.Text, ",", ""))
+            ok = True
+            Exit Function
+        End If
+    Next ln
+fin:
+End Function
+
+Private Function BankSheet() As Worksheet
+    Dim ws As Worksheet, shp As Object, i As Long, hd As Variant, wd As Variant, back As Object, su As Boolean
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(BB_SHEET)
+    On Error GoTo 0
+    If Not ws Is Nothing Then Set BankSheet = ws: Exit Function
+    Set back = ActiveSheet
+    su = Application.ScreenUpdating
+    Application.ScreenUpdating = False
+    gNoAnim = True
+    Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(FX_SHEET))
+    ws.Name = BB_SHEET
+    On Error Resume Next
+    ws.Tab.Color = RGB(20, 184, 166)
+    ws.Cells.Font.Name = "Segoe UI": ws.Cells.Font.Size = 10
+    wd = Array(36, 15, 20, 22, 16, 28, 18, 40)
+    For i = 0 To 7: ws.Columns(i + 1).ColumnWidth = wd(i): Next i
+    ws.Rows(1).RowHeight = 34
+    With ws.Range("A1:H1")
+        .Interior.Color = RGB(11, 31, 58)
+    End With
+    ws.Range("A1").Value = "  Bank Balances    Tally vs your bank statement, for every bank account"
+    ws.Range("A1").Font.Color = RGB(148, 180, 210)
+    ws.Range("A1").VerticalAlignment = -4108
+    ws.Range("A1").Characters(1, 15).Font.Bold = True
+    ws.Range("A1").Characters(1, 15).Font.Size = 15
+    ws.Range("A1").Characters(1, 15).Font.Color = RGB(255, 255, 255)
+    ws.Rows(2).RowHeight = 30
+    ws.Range("A3:H3").Merge
+    ws.Range("A3").Value = BB_NOTE
+    ws.Range("A3").WrapText = True
+    ws.Range("A3").Font.Italic = True
+    ws.Range("A3").Font.Size = 9
+    ws.Range("A3").Font.Color = RGB(180, 83, 9)
+    ws.Range("A3").VerticalAlignment = -4160
+    ws.Rows(3).RowHeight = 30
+    ws.Range("A4").Value = "Positive = money in the account, minus = overdrawn. Updated on every statement import - click Refresh balances after posting or fixing entries."
+    ws.Range("A4").Font.Size = 9: ws.Range("A4").Font.Color = RGB(100, 116, 139)
+    hd = Array("Bank ledger (Tally)", "Statement up to", "Statement balance *", "Tally balance (same date)", "Difference", "Status", "Last checked", "Statement file")
+    ws.Rows(5).RowHeight = 30
+    For i = 0 To 7
+        With ws.Cells(5, i + 1)
+            .Value = hd(i)
+            .Font.Bold = True: .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = RGB(19, 52, 94)
+            .HorizontalAlignment = -4108: .VerticalAlignment = -4108: .WrapText = True
+        End With
+    Next i
+    ws.Range("B6:B500").NumberFormat = "dd-mm-yyyy"
+    ws.Range("C6:E500").NumberFormat = "#,##0.00;-#,##0.00;0.00"
+    ws.Range("G6:G500").NumberFormat = "dd-mm-yy hh:mm"
+    ' buttons
+    Set shp = NewBox(ws, "bb_refresh", 5, ws.Range("A2").Left + 4, ws.Range("A2").Top + 4, 190, 22, RGB(20, 184, 166))
+    StyleText shp, ChrW(&H21BB) & "  Refresh balances", 10, RGB(255, 255, 255), True, 2
+    shp.TextFrame2.VerticalAnchor = 3: shp.OnAction = "TallyLink.RefreshBankBalances": shp.Placement = 2
+    Set shp = NewBox(ws, "bb_home", 5, ws.Range("A2").Left + 204, ws.Range("A2").Top + 4, 110, 22, RGB(230, 250, 246))
+    StyleText shp, ChrW(&H2302) & "  Home", 10, RGB(15, 118, 110), True, 2
+    shp.TextFrame2.VerticalAnchor = 3: shp.OnAction = "TallyLink.GoHome": shp.Placement = 2
+    ActiveWindow.DisplayGridlines = False
+    On Error Resume Next
+    If Not back Is Nothing Then back.Activate
+    gNoAnim = False
+    Application.ScreenUpdating = su
+    Set BankSheet = ws
+End Function
+
+Private Function BBRow(ws As Worksheet, ByVal bank As String, ByVal addIfMissing As Boolean) As Long
+    Dim r As Long, lastR As Long
+    lastR = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    For r = BB_FIRST To lastR
+        If StrComp(CellText(ws.Cells(r, 1).Value), bank, vbTextCompare) = 0 Then BBRow = r: Exit Function
+    Next r
+    If addIfMissing Then
+        If lastR < BB_FIRST Then BBRow = BB_FIRST Else BBRow = lastR + 1
+        ws.Cells(BBRow, 1).Value = bank
+    End If
+End Function
+
+' Compare one row with Tally and colour it
+Private Sub BBCheckRow(ws As Worksheet, ByVal r As Long)
+    Dim bank As String, d As Variant, tb As Double, ok As Boolean, st As String, clr As Long
+    bank = CellText(ws.Cells(r, 1).Value)
+    d = ParseDateCell(ws.Cells(r, 2).Value)
+    If bank = "" Or IsEmpty(d) Then Exit Sub
+    tb = TallyBankBalance(bank, CDate(d), ok)
+    If ok Then ws.Cells(r, 4).Value = tb Else ws.Cells(r, 4).ClearContents
+    If Not IsNumeric(ws.Cells(r, 3).Value) Or CellText(ws.Cells(r, 3).Value) = "" Then
+        ws.Cells(r, 5).ClearContents
+        st = "No balance in the statement": clr = RGB(241, 245, 249)
+    ElseIf Not ok Then
+        ws.Cells(r, 5).ClearContents
+        st = "Tally not reachable - Refresh later": clr = RGB(254, 243, 199)
+    Else
+        ws.Cells(r, 5).Value = Round(CDbl(ws.Cells(r, 3).Value) - tb, 2)
+        If Abs(CDbl(ws.Cells(r, 5).Value)) < 0.01 Then
+            st = ChrW(&H2714) & "  Match": clr = CLR_OK
+        Else
+            st = ChrW(&H2716) & "  Does not match - check": clr = CLR_ERR
+        End If
+    End If
+    ws.Cells(r, 6).Value = st
+    ws.Range(ws.Cells(r, 5), ws.Cells(r, 6)).Interior.Color = clr
+    ws.Cells(r, 7).Value = Now
+End Sub
+
+' Called after an import: remember the statement balance (latest statement wins) and compare. Returns a short message.
+Private Function BankStmtBalance(ByVal bank As String, ByVal dTo As Date, ByVal bal As Double, ByVal hasBal As Boolean, ByVal fileName As String) As String
+    Dim ws As Worksheet, r As Long, old As Variant
+    On Error GoTo fin
+    Set ws = BankSheet()
+    r = BBRow(ws, bank, True)
+    old = ParseDateCell(ws.Cells(r, 2).Value)
+    If Not IsEmpty(old) Then
+        If CDate(old) > dTo And IsNumeric(ws.Cells(r, 3).Value) And CellText(ws.Cells(r, 3).Value) <> "" Then GoTo check
+    End If
+    ws.Cells(r, 2).Value = dTo
+    If hasBal Then ws.Cells(r, 3).Value = bal Else ws.Cells(r, 3).Value = "not in statement"
+    ws.Cells(r, 8).Value = fileName
+check:
+    BBCheckRow ws, r
+    RefreshBankSummary
+    If Left$(CellText(ws.Cells(r, 6).Value), 1) = ChrW(&H2714) Then
+        BankStmtBalance = "Bank balance on " & Format$(ws.Cells(r, 2).Value, "dd-mm-yyyy") & ": Tally matches the statement *"
+    ElseIf IsNumeric(ws.Cells(r, 5).Value) And CellText(ws.Cells(r, 5).Value) <> "" Then
+        BankStmtBalance = "Bank balance on " & Format$(ws.Cells(r, 2).Value, "dd-mm-yyyy") & ": Tally differs from the statement by " & _
+            Format$(ws.Cells(r, 5).Value, "#,##0.00") & " * (see Bank Balances)"
+    End If
+fin:
+End Function
+
+'================ BUTTON: Refresh balances ================
+Public Sub RefreshBankBalances()
+    Dim ws As Worksheet, r As Long, lastR As Long, n As Long, nOk As Long, nBad As Long
+    Set ws = BankSheet()
+    lastR = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastR < BB_FIRST Then
+        Notify "No bank statements imported yet." & vbCrLf & "Import a statement - its balance is checked automatically.", "warn"
+        Exit Sub
+    End If
+    ProgressShow "Checking bank balances", "Reading balances from Tally..."
+    For r = BB_FIRST To lastR
+        ProgressUpdate (r - BB_FIRST + 1) / (lastR - BB_FIRST + 1), "Checking " & CellText(ws.Cells(r, 1).Value) & "..."
+        BBCheckRow ws, r
+        n = n + 1
+        If Left$(CellText(ws.Cells(r, 6).Value), 1) = ChrW(&H2714) Then nOk = nOk + 1
+        If Left$(CellText(ws.Cells(r, 6).Value), 1) = ChrW(&H2716) Then nBad = nBad + 1
+    Next r
+    ProgressDone "Balances checked"
+    RefreshBankSummary
+    LogAct "Refresh bank balances", nOk & " match, " & nBad & " do not match", n
+    Notify nOk & " of " & n & " bank account(s) match Tally." & IIf(nBad > 0, vbCrLf & nBad & " do not match - see the red rows.", "") & _
+        vbCrLf & "* as per the statements provided by you", IIf(nBad > 0, "warn", "ok")
+End Sub
+
+Public Sub GoBankBalances()
+    BankSheet
+    GoSheet BB_SHEET, "A6"
+End Sub
+
+' Home card "Bank balance check"
+Private Sub RefreshBankSummary()
+    Dim ws As Worksheet, home As Worksheet, r As Long, lastR As Long, nOk As Long, nBad As Long, firstBad As String, st As String
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(BB_SHEET)
+    Set home = ThisWorkbook.Worksheets("Home")
+    If home Is Nothing Then Exit Sub
+    If Not ws Is Nothing Then
+        lastR = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+        For r = BB_FIRST To lastR
+            st = CellText(ws.Cells(r, 6).Value)
+            If Left$(st, 1) = ChrW(&H2714) Then nOk = nOk + 1
+            If Left$(st, 1) = ChrW(&H2716) Then
+                nBad = nBad + 1
+                If firstBad = "" Then firstBad = CellText(ws.Cells(r, 1).Value)
+            End If
+        Next r
+    End If
+    home.Unprotect SHEET_PW
+    home.Range("AL14").Value = "Bank balance check *"
+    If nOk + nBad = 0 Then
+        home.Range("AL13").Value = ChrW(&H2013)
+        home.Range("AL13").Font.Color = RGB(148, 163, 184)
+        home.Range("AL15").Value = "import a statement to check"
+        home.Range("AL12:AR12").Interior.Color = RGB(203, 213, 225)
+    ElseIf nBad = 0 Then
+        home.Range("AL13").Value = nOk & " / " & nOk
+        home.Range("AL13").Font.Color = RGB(5, 150, 105)
+        home.Range("AL15").Value = "all accounts match Tally"
+        home.Range("AL12:AR12").Interior.Color = RGB(52, 211, 153)
+    Else
+        home.Range("AL13").Value = nOk & " / " & (nOk + nBad)
+        home.Range("AL13").Font.Color = RGB(220, 38, 38)
+        home.Range("AL15").Value = "check: " & Left$(firstBad, 24) & IIf(nBad > 1, " +" & (nBad - 1), "")
+        home.Range("AL12:AR12").Interior.Color = RGB(220, 38, 38)
+    End If
+    home.Range("AL13").HorizontalAlignment = -4131
+    home.Range("AR39").Value = APP_NAME & " v" & APP_VERSION
+    home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
+    home.EnableSelection = 0
+End Sub
+
+' One-time changes of v2.2.1: Bank Balances sheet, Home card, footnote, Help section
+Private Sub ApplyLayout221()
+    Dim home As Worksheet, shp As Object, rg As Range, hl As Worksheet, f As Range, r As Long, i As Long, steps As Variant
+    On Error Resume Next
+    If CStr(AppData().Range("B10").Value) = "2.2.1" Then Exit Sub
+    BankSheet
+    Set home = ThisWorkbook.Worksheets("Home")
+    home.Unprotect SHEET_PW
+    ' 5th card (was Ledgers) becomes the bank balance check; click opens the Bank Balances sheet
+    home.Range("AL15").Font.Color = RGB(100, 116, 139)
+    For Each shp In home.Shapes
+        If shp.Name = "kpi_bank" Then shp.Delete
+    Next shp
+    Set rg = home.Range("AL12:AR15")
+    Set shp = home.Shapes.AddShape(1, rg.Left, rg.Top, rg.Width, rg.Height)
+    shp.Name = "kpi_bank"
+    shp.Fill.ForeColor.RGB = RGB(255, 255, 255): shp.Fill.Transparency = 0.99
+    shp.Line.Visible = 0
+    shp.OnAction = "TallyLink.GoBankBalances"
+    shp.Placement = 1
+    ' footnote for the * (no liability on the figures)
+    home.Range("B40").Value = "* Bank balance check: statement balance as per the bank statement provided by you; Tally balance as per your Tally data. " & _
+        "For reference only - verify with your bank. Postify Bank accepts no liability for these figures."
+    home.Range("B40").Font.Size = 8: home.Range("B40").Font.Italic = True: home.Range("B40").Font.Color = RGB(148, 163, 184)
+    home.Rows(40).RowHeight = 16
+    home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
+    ' Help: short section
+    Set hl = ThisWorkbook.Worksheets("Help")
+    Set f = hl.Columns(2).Find(What:="Bank balance check", LookIn:=-4163, LookAt:=1)
+    If f Is Nothing Then
+        steps = Array( _
+            "Every time you import a statement, Postify reads its closing balance and compares it with the bank ledger's balance in Tally on the same date. The result is on the Home card 'Bank balance check' and, for every bank account, on the Bank Balances sheet.", _
+            "Green = Tally matches the statement. Red = there is a difference: entries missing in Tally, entered twice, or with a wrong amount. Click Refresh balances (Bank Balances sheet) after posting or fixing entries.", _
+            "Find duplicates checks the balance first: when Tally matches the statement, entries of the same amount are real transactions and nothing is suggested for deletion.", _
+            "* The statement balance is as per the bank statement provided by you, and the Tally balance as per your Tally data. For reference only - always verify with your bank. Postify Bank does not verify these figures and accepts no liability for them.")
+        r = hl.Cells(hl.Rows.Count, 2).End(xlUp).Row + 3
+        hl.Cells(r, 2).Value = "Bank balance check"
+        With hl.Cells(r, 2)
+            .Font.Bold = True: .Font.Size = 13: .Font.Color = RGB(11, 31, 58): .VerticalAlignment = -4107
+        End With
+        hl.Rows(r).RowHeight = 26
+        For i = 0 To UBound(steps)
+            With hl.Cells(r + 1 + i, 2)
+                .Value = steps(i)
+                .WrapText = True: .VerticalAlignment = -4160: .IndentLevel = 1
+                .Interior.Color = RGB(255, 255, 255): .Font.Color = RGB(30, 41, 59): .Font.Size = 10
+            End With
+            hl.Rows(r + 1 + i).RowHeight = 16 * (Len(steps(i)) \ 120 + 1) + 8
+        Next i
+    End If
+    SetApp "A10", "Layout 2.2.1"
+    SetApp "B10", "2.2.1"
+    RefreshBankSummary
 End Sub
