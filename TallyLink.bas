@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.2.1"
+Public Const APP_VERSION As String = "2.2.2"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -27,9 +27,9 @@ Private Const SHEET_PW As String = "postify"
 Private Const LAYOUT_TAG As String = "2.2.0"
 Private Const BB_SHEET As String = "Bank Balances"
 Private Const BB_FIRST As Long = 6
-Private Const BB_NOTE As String = "* Statement balance is as per the bank statement provided by you (balance after the last transaction imported). " & _
-    "Tally balance is read from your Tally company for the same date. For reference only - please verify with your bank. " & _
-    "Postify Bank does not verify these figures and accepts no liability for them."
+Private Const BB_NOTE As String = "* Statement balance is as per the bank statement provided by you (balance after the last transaction imported), " & _
+    "and the Tally balance as per your Tally company on the same date. The statement you provided is the basis for this check."
+Private Const HOME_NOTE As String = "* Bank balance check: based on the bank statement provided by you and your Tally data for the same date."
 
 Private Const CLR_OK As Long = 13561798     ' light green
 Private Const CLR_ERR As Long = 13551615    ' light red
@@ -59,9 +59,9 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "New: Bank balance check - see at a glance whether your bank balance in Tally matches your bank statement, for every bank account (new card on Home + new Bank Balances sheet)|" & _
-    "Find duplicates now checks the balance first: if Tally matches your statement, nothing is suggested for deletion|" & _
-    "Minor bug fixes"
+Private Const WHATS_NEW As String = "Cleaner formatting - rupee amounts in accounting format and neat borders on every table|" & _
+    "Minor bugs fixed|" & _
+    "New: Update history - see the features added over the past few updates (Home > Updates & info > Update history)"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -508,6 +508,7 @@ Private Function LoadLedgersCore(ByVal silent As Boolean) As Long
         i = i + 1
     Next n
     ws.Range("A1:C" & i - 1).Sort Key1:=ws.Range("A2"), Order1:=xlAscending, Header:=xlYes
+    GridBorders ws.Range("A1:C" & i - 1)
     LoadLedgersCore = i - 2
     If Not silent Then MsgBox (i - 2) & " ledgers loaded from Tally." & vbCrLf & _
         "The Bank and Party columns on the Entries sheet now show them as a dropdown.", vbInformation, "Ledgers loaded"
@@ -1221,6 +1222,7 @@ Private Sub LearnSave()
     ws.Range("A2").Resize(gLN, 1).NumberFormat = "@"
     ws.Range("D2").Resize(gLN, 1).NumberFormat = "dd-mm-yyyy"
     ws.Range("A2").Resize(gLN, 5).Value = outv
+    GridBorders ws.Range("A1").Resize(gLN + 1, 5)
     If lastR > gLN + 1 Then ws.Range("A" & (gLN + 2) & ":E" & lastR).ClearContents
     gLDirty = False
 End Sub
@@ -2446,7 +2448,7 @@ Public Sub FindDuplicatesInTally()
     rp.Range("A1").Value = "Possible duplicate vouchers in '" & bank & "'  (" & info & ")"
     rp.Range("A1").Font.Bold = True
     rp.Range("A2").Value = "Same amount and direction within " & win & " day(s), more copies in Tally than in the statement. 'Made by this file' = narration matches a row posted from the Entries sheet. Delete the suggested ones in Tally: Day Book > select voucher > Alt+D."
-    rp.Range("A3").Value = "Bank balance: " & balNote & IIf(InStr(balNote, "*") > 0, "    (* as per the bank statement provided by you - verify with your bank)", "")
+    rp.Range("A3").Value = "Bank balance: " & balNote & IIf(InStr(balNote, "*") > 0, "    (* based on the bank statement provided by you)", "")
     rp.Range("A3").Font.Italic = True
     rp.Range("A3").Font.Color = IIf(balOK, RGB(5, 150, 105), RGB(180, 83, 9))
     rp.Range("A4:J4").Value = Array("Group", "Date", "In/Out", "Amount", "Voucher Type", "Voucher No", "Other ledger", "Narration", "Made by this file?", "Suggestion")
@@ -2496,7 +2498,7 @@ Public Sub FindDuplicatesInTally()
                 rp.Cells(rr, 1).Value = gi
                 rp.Cells(rr, 2).Value = vi(0): rp.Cells(rr, 2).NumberFormat = "dd-mm-yyyy"
                 rp.Cells(rr, 3).Value = IIf(vi(1), "In", "Out")
-                rp.Cells(rr, 4).Value = vi(2): rp.Cells(rr, 4).NumberFormat = "#,##0.00"
+                rp.Cells(rr, 4).Value = vi(2): SetRupee rp.Cells(rr, 4)
                 rp.Cells(rr, 5).Value = vi(3)
                 rp.Cells(rr, 6).NumberFormat = "@": rp.Cells(rr, 6).Value = vi(4)
                 rp.Cells(rr, 7).Value = vi(5)
@@ -2514,6 +2516,7 @@ Public Sub FindDuplicatesInTally()
         End If
     Next gi
     On Error Resume Next
+    If rr > 5 Then GridBorders rp.Range(rp.Cells(4, 1), rp.Cells(rr - 1, 10))
     rp.Columns("A:G").AutoFit
     rp.Columns("H").ColumnWidth = 60
     rp.Columns("I:J").AutoFit
@@ -3043,6 +3046,8 @@ Public Sub AppStartup()
     ThisWorkbook.Worksheets("Home").Range("A1").Select
     StartupWithSplash
     If CStr(AppData().Range("B8").Value) <> APP_VERSION Then
+        SetApp "A11", "Last updated"
+        SetApp "B11", Date
         Application.OnTime Now + TimeSerial(0, 0, 1), "TallyLink.ShowWhatsNew"
     End If
     Application.OnTime Now + TimeSerial(0, 0, 4), "Updater.AutoCheck"
@@ -3061,7 +3066,7 @@ Public Sub OnSheetActivate(ByVal shName As String)
     If shName = "Home" Then FitHome
     If gNoAnim Or gProgOn Then Exit Sub
     Select Case shName
-        Case "Home", "Entries", "Change Ledger", "Activity Log", "Settings", "Ledgers", "Rules", "Learned", "Help", BB_SHEET
+        Case "Home", "Entries", "Change Ledger", "Activity Log", "Settings", "Ledgers", "Rules", "Learned", "Help", BB_SHEET, "Update History"
             SheetFadeIn ActiveSheet
     End Select
 End Sub
@@ -3201,9 +3206,11 @@ Private Sub StartupWithSplash()
         Select Case k
             Case 1: ApplyLayout220
                     ApplyLayout221
+                    ApplyLayout222
                     ProtectFormulaSheets
             Case 2: RefreshTallyStatus
             Case 3: EnsureHelpUpdateGuide
+                    EnsureHistorySheet
         End Select
         For i = 1 To 5
             bar.Width = 6 + (tw - 6) * (k * 5 + i) / 25
@@ -3225,9 +3232,11 @@ plain:
     On Error Resume Next
     ApplyLayout220
     ApplyLayout221
+    ApplyLayout222
     ProtectFormulaSheets
     RefreshTallyStatus
     EnsureHelpUpdateGuide
+    EnsureHistorySheet
 End Sub
 
 ' One-time sheet improvements of v2.2.0 (wrap + fit rows, colour keys, Needs review figure)
@@ -3672,6 +3681,7 @@ Public Sub LogAct(ByVal action As String, ByVal details As String, Optional ByVa
     ws.Cells(r, 4).Value = details
     If n >= 0 Then ws.Cells(r, 5).Value = n
     ws.Cells(r, 6).Value = Environ$("USERNAME")
+    GridBorders ws.Range(ws.Cells(r, 2), ws.Cells(r, 6))
 End Sub
 
 '---------------- undo a ledger change ----------------
@@ -3755,17 +3765,11 @@ Public Sub ShowWhatsNew()
     End With
     lst.OnAction = "TallyLink.WhatsNewNoop"
     y = lst.Top + lst.Height + 18
-    Set shp = NewBox(ws, "wn_ok", 5, cl + cw - 28 - 120, y, 120, 34, RGB(20, 184, 166))
+    Set shp = NewBox(ws, "wn_ok", 5, cl + (cw - 140) / 2, y, 140, 34, RGB(20, 184, 166))
     shp.Adjustments.Item(1) = 0.25
     StyleText shp, "Got it", 11, RGB(255, 255, 255), True, 2
     shp.TextFrame2.VerticalAnchor = 3
     shp.OnAction = "TallyLink.WhatsNewHide"
-    Set shp = NewBox(ws, "wn_guide", 5, cl + cw - 28 - 120 - 12 - 150, y, 150, 34, RGB(255, 255, 255))
-    shp.Adjustments.Item(1) = 0.25
-    shp.Line.Visible = -1: shp.Line.ForeColor.RGB = RGB(20, 184, 166): shp.Line.Weight = 1.25
-    StyleText shp, "How to update", 11, RGB(15, 118, 110), True, 2
-    shp.TextFrame2.VerticalAnchor = 3
-    shp.OnAction = "TallyLink.ShowUpdateGuide"
     card.Height = y + 34 + 26 - ct
     Application.ScreenUpdating = True
     LogAct "Updated", APP_NAME & " v" & APP_VERSION & " installed"
@@ -3922,7 +3926,7 @@ Private Function BankSheet() As Worksheet
         End With
     Next i
     ws.Range("B6:B500").NumberFormat = "dd-mm-yyyy"
-    ws.Range("C6:E500").NumberFormat = "#,##0.00;-#,##0.00;0.00"
+    SetRupee ws.Range("C6:E500")
     ws.Range("G6:G500").NumberFormat = "dd-mm-yy hh:mm"
     ' buttons
     Set shp = NewBox(ws, "bb_refresh", 5, ws.Range("A2").Left + 4, ws.Range("A2").Top + 4, 190, 22, RGB(20, 184, 166))
@@ -3948,6 +3952,8 @@ Private Function BBRow(ws As Worksheet, ByVal bank As String, ByVal addIfMissing
     If addIfMissing Then
         If lastR < BB_FIRST Then BBRow = BB_FIRST Else BBRow = lastR + 1
         ws.Cells(BBRow, 1).Value = bank
+        GridBorders ws.Range(ws.Cells(5, 1), ws.Cells(BBRow, 8))
+        SetRupee ws.Range(ws.Cells(BBRow, 3), ws.Cells(BBRow, 5))
     End If
 End Function
 
@@ -4094,9 +4100,8 @@ Private Sub ApplyLayout221()
     shp.Line.Visible = 0
     shp.OnAction = "TallyLink.GoBankBalances"
     shp.Placement = 1
-    ' footnote for the * (no liability on the figures)
-    home.Range("B40").Value = "* Bank balance check: statement balance as per the bank statement provided by you; Tally balance as per your Tally data. " & _
-        "For reference only - verify with your bank. Postify Bank accepts no liability for these figures."
+    ' footnote for the *
+    home.Range("B40").Value = HOME_NOTE
     home.Range("B40").Font.Size = 8: home.Range("B40").Font.Italic = True: home.Range("B40").Font.Color = RGB(148, 163, 184)
     home.Rows(40).RowHeight = 16
     home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
@@ -4108,7 +4113,7 @@ Private Sub ApplyLayout221()
             "Every time you import a statement, Postify reads its closing balance and compares it with the bank ledger's balance in Tally on the same date. The result is on the Home card 'Bank balance check' and, for every bank account, on the Bank Balances sheet.", _
             "Green = Tally matches the statement. Red = there is a difference: entries missing in Tally, entered twice, or with a wrong amount. Click Refresh balances (Bank Balances sheet) after posting or fixing entries.", _
             "Find duplicates checks the balance first: when Tally matches the statement, entries of the same amount are real transactions and nothing is suggested for deletion.", _
-            "* The statement balance is as per the bank statement provided by you, and the Tally balance as per your Tally data. For reference only - always verify with your bank. Postify Bank does not verify these figures and accepts no liability for them.")
+            "* The statement balance is as per the bank statement provided by you, and the Tally balance as per your Tally data for the same date. The statement you provided is the basis for this check.")
         r = hl.Cells(hl.Rows.Count, 2).End(xlUp).Row + 3
         hl.Cells(r, 2).Value = "Bank balance check"
         With hl.Cells(r, 2)
@@ -4127,4 +4132,191 @@ Private Sub ApplyLayout221()
     SetApp "A10", "Layout 2.2.1"
     SetApp "B10", "2.2.1"
     RefreshBankSummary
+End Sub
+
+'==============================================================
+'  v2.2.2: rupee accounting format, borders, update history
+'==============================================================
+' Rupee amounts in accounting format (falls back to a plain accounting format if the rupee one is not accepted)
+Private Sub SetRupee(rg As Range)
+    Dim rs As String
+    On Error Resume Next
+    rs = "[$" & ChrW(&H20B9) & "-4009]"
+    rg.NumberFormat = "_ " & rs & "* #,##0.00_ ;_ " & rs & "* -#,##0.00_ ;_ " & rs & "* ""-""??_ ;_ @_ "
+    If Err.Number <> 0 Then
+        Err.Clear
+        rg.NumberFormat = "_(* #,##0.00_);_(* (#,##0.00);_(* ""-""??_);_(@_)"
+    End If
+End Sub
+
+' Thin light-grey grid on a table range
+Private Sub GridBorders(rg As Range)
+    Dim b As Variant
+    On Error Resume Next
+    For Each b In Array(7, 8, 9, 10, 11, 12)
+        With rg.Borders(b)
+            .LineStyle = 1
+            .Weight = 2
+            .Color = RGB(203, 213, 225)
+        End With
+    Next b
+End Sub
+
+Private Function LastUsedRow(ws As Worksheet, ByVal col As Long, ByVal minRow As Long) As Long
+    LastUsedRow = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
+    If LastUsedRow < minRow Then LastUsedRow = minRow
+End Function
+
+Private Sub ApplyLayout222()
+    Dim ws As Worksheet, home As Worksheet, hl As Worksheet, f As Range, rg As Range, shp As Object, lastR As Long
+    On Error Resume Next
+    If CStr(AppData().Range("B12").Value) = "2.2.2" Then Exit Sub
+    ' Entries: amounts
+    Set ws = EntriesSheet()
+    SetRupee ws.Range(ws.Cells(FIRST_ROW, COL_OUT), ws.Cells(FIRST_ROW + 2499, COL_IN))
+    ' Change Ledger: amounts + grid
+    Set ws = FxSheet()
+    SetRupee ws.Range(ws.Cells(S_FIRST, S_DR), ws.Cells(S_FIRST + 2999, S_CR))
+    GridBorders ws.Range(ws.Cells(S_FIRST - 1, 1), ws.Cells(S_FIRST + 2999, S_STATUS))
+    ' Bank Balances
+    Set ws = BankSheet()
+    SetRupee ws.Range("C6:E500")
+    ws.Range("A3").Value = BB_NOTE
+    ws.Range("A3").Font.Color = RGB(100, 116, 139)
+    GridBorders ws.Range("A5:H" & LastUsedRow(ws, 1, BB_FIRST))
+    ' other tables
+    Set ws = ThisWorkbook.Worksheets("Activity Log")
+    If Not ws Is Nothing Then GridBorders ws.Range("B4:F" & LastUsedRow(ws, 2, 5))
+    Set ws = ThisWorkbook.Worksheets("Ledgers")
+    If Not ws Is Nothing Then GridBorders ws.Range("A1:C" & LastUsedRow(ws, 1, 2))
+    Set ws = ThisWorkbook.Worksheets("Rules")
+    If Not ws Is Nothing Then GridBorders ws.Range("A1:D" & LastUsedRow(ws, 1, 2))
+    Set ws = ThisWorkbook.Worksheets("Learned")
+    If Not ws Is Nothing Then GridBorders ws.Range("A1:E" & LastUsedRow(ws, 1, 2))
+    ' Home: last updated date, update history button, softer footnote
+    Set home = ThisWorkbook.Worksheets("Home")
+    home.Unprotect SHEET_PW
+    home.Range("Y33").Value = "Last updated"
+    home.Range("Y33").Font.Color = home.Range("Y32").Font.Color
+    home.Range("AF33").Formula = "=IF(AppData!$B$11="""",""-"",TEXT(AppData!$B$11,""dd-mmm-yyyy""))"
+    home.Range("AF33").Font.Bold = True
+    home.Range("AF33").Font.Color = RGB(11, 31, 58)
+    home.Range("B40").Value = HOME_NOTE
+    Set rg = home.Range("Y37:AQ37")
+    rg.UnMerge
+    rg.Merge
+    rg.Value = ChrW(&H2630) & "  Update history  -  features of the past updates"
+    rg.HorizontalAlignment = -4108: rg.VerticalAlignment = -4108
+    rg.Font.Bold = True: rg.Font.Color = RGB(15, 118, 110)
+    rg.Interior.Color = RGB(230, 250, 246)
+    GridBorders rg
+    home.Rows(37).RowHeight = 24
+    For Each shp In home.Shapes
+        If shp.Name = "upd_hist" Then shp.Delete
+    Next shp
+    Set shp = home.Shapes.AddShape(1, rg.Left, rg.Top, rg.Width, rg.Height)
+    shp.Name = "upd_hist"
+    shp.Fill.ForeColor.RGB = RGB(255, 255, 255): shp.Fill.Transparency = 0.99
+    shp.Line.Visible = 0
+    shp.OnAction = "TallyLink.ShowUpdateHistory"
+    shp.Placement = 1
+    home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
+    home.EnableSelection = 0
+    ' Help: softer wording of the bank balance note
+    Set hl = ThisWorkbook.Worksheets("Help")
+    Set f = hl.Columns(2).Find(What:="accepts no liability", LookIn:=-4163, LookAt:=2)
+    If Not f Is Nothing Then f.Value = "* The statement balance is as per the bank statement provided by you, and the Tally balance as per your Tally data for the same date. The statement you provided is the basis for this check."
+    EnsureHistorySheet
+    SetApp "A12", "Layout 2.2.2"
+    SetApp "B12", "2.2.2"
+End Sub
+
+' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
+Private Function HistoryText() As String
+    Dim s As String
+    s = "2.2.2|09-Nov-2026|Cleaner formatting - rupee amounts in accounting format and neat borders on every table|" & _
+        "Last updated date shown on Home (Updates & info)|Update history - this page|Minor bugs fixed"
+    s = s & "##2.2.1|09-Nov-2026|Bank balance check - Tally balance vs your bank statement for every bank account (Home card + Bank Balances sheet)|" & _
+        "Find duplicates checks the balance first - nothing is suggested for deletion when Tally matches your statement|Minor bugs fixed"
+    s = s & "##2.2.0|07-Nov-2026|Cells with formulas locked, so the dashboard cannot be broken by an accidental edit|Opening animation|" & _
+        "Colour key on Entries and Change Ledger|Rows grow to fit long narrations|Smoother page changes|" & _
+        "Needs review counts yellow and red rows and errors|Change Ledger orange rows fixed"
+    s = s & "##2.1.1|06-Nov-2026|Home dashboard fills your screen"
+    s = s & "##2.1.0|06-Nov-2026|Smarter learning - account numbers are remembered (e.g. MOB/SELFFT/9200.., XXXX3508)|" & _
+        "Learns from the entries already in Tally - the latest entry wins|Learn from posted rows shows what was learned and skipped|" & _
+        "Messages stay inside the screen|Smooth animation when switching sheets|What's new window and update instructions"
+    s = s & "##2.0.0|05-Nov-2026|Postify Bank launch - dashboard, ribbon, loading screen, notifications, one-click updates|" & _
+        "Bank reconciliation date filled automatically|Undo for Change Ledger|Activity Log"
+    HistoryText = s
+End Function
+
+' "Update History" sheet, rebuilt whenever the version changes
+Private Sub EnsureHistorySheet()
+    Dim ws As Worksheet, back As Object, su As Boolean, vers As Variant, v As Variant, p As Variant, r As Long, i As Long, shp As Object
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets("Update History")
+    If Not ws Is Nothing Then
+        If CStr(ws.Range("Z1").Value) = APP_VERSION Then Exit Sub
+    End If
+    Set back = ActiveSheet
+    su = Application.ScreenUpdating
+    Application.ScreenUpdating = False
+    gNoAnim = True
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets("Help"))
+        ws.Name = "Update History"
+        ws.Tab.Color = RGB(148, 163, 184)
+    End If
+    ws.Cells.Clear
+    For Each shp In ws.Shapes: shp.Delete: Next shp
+    ws.Cells.Font.Name = "Segoe UI": ws.Cells.Font.Size = 10
+    ws.Cells.Interior.Color = RGB(244, 247, 251)
+    ws.Columns("A").ColumnWidth = 3: ws.Columns("B").ColumnWidth = 110: ws.Columns("C").ColumnWidth = 3
+    ws.Rows(1).RowHeight = 34
+    ws.Range("A1:C1").Interior.Color = RGB(11, 31, 58)
+    ws.Range("B1").Value = "Update History    what changed in each version of " & APP_NAME
+    ws.Range("B1").Font.Color = RGB(148, 180, 210)
+    ws.Range("B1").VerticalAlignment = -4108
+    ws.Range("B1").Characters(1, 14).Font.Bold = True
+    ws.Range("B1").Characters(1, 14).Font.Size = 15
+    ws.Range("B1").Characters(1, 14).Font.Color = RGB(255, 255, 255)
+    ws.Range("Z1").Value = APP_VERSION
+    ws.Range("Z1").Font.Color = RGB(11, 31, 58)
+    ws.Rows(2).RowHeight = 30
+    Set shp = NewBox(ws, "uh_home", 5, ws.Range("B2").Left, ws.Range("B2").Top + 4, 110, 22, RGB(230, 250, 246))
+    StyleText shp, ChrW(&H2302) & "  Home", 10, RGB(15, 118, 110), True, 2
+    shp.TextFrame2.VerticalAnchor = 3: shp.OnAction = "TallyLink.GoHome": shp.Placement = 2
+    r = 4
+    vers = Split(HistoryText(), "##")
+    For Each v In vers
+        p = Split(v, "|")
+        ws.Cells(r, 2).Value = "v" & p(0) & "     " & p(1) & IIf(p(0) = APP_VERSION, "     (installed)", "")
+        ws.Cells(r, 2).Font.Bold = True: ws.Cells(r, 2).Font.Size = 13: ws.Cells(r, 2).Font.Color = RGB(11, 31, 58)
+        ws.Cells(r, 2).VerticalAlignment = -4107
+        ws.Rows(r).RowHeight = 26
+        r = r + 1
+        For i = 2 To UBound(p)
+            With ws.Cells(r, 2)
+                .Value = ChrW(&H2713) & "   " & p(i)
+                .WrapText = True: .IndentLevel = 1: .VerticalAlignment = -4108
+                .Interior.Color = RGB(255, 255, 255): .Font.Color = RGB(30, 41, 59)
+                .Characters(1, 1).Font.Color = RGB(20, 184, 166)
+                .Characters(1, 1).Font.Bold = True
+            End With
+            ws.Rows(r).RowHeight = 20 * (Len(p(i)) \ 125 + 1)
+            r = r + 1
+        Next i
+        GridBorders ws.Range(ws.Cells(r - UBound(p) + 1, 2), ws.Cells(r - 1, 2))
+        r = r + 1
+    Next v
+    ActiveWindow.DisplayGridlines = False
+    If Not back Is Nothing Then back.Activate
+    gNoAnim = False
+    Application.ScreenUpdating = su
+End Sub
+
+' Button on Home (Updates & info): Update history
+Public Sub ShowUpdateHistory()
+    EnsureHistorySheet
+    GoSheet "Update History", "B4"
 End Sub
