@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.2.2"
+Public Const APP_VERSION As String = "2.2.3"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -59,9 +59,8 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Cleaner formatting - rupee amounts in accounting format and neat borders on every table|" & _
-    "Minor bugs fixed|" & _
-    "New: Update history - see the features added over the past few updates (Home > Updates & info > Update history)"
+Private Const WHATS_NEW As String = "Minor bug fixes|" & _
+    "New: Dark mode - switch the dashboard between light and dark with the button at the top right of Home"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -3207,6 +3206,8 @@ Private Sub StartupWithSplash()
             Case 1: ApplyLayout220
                     ApplyLayout221
                     ApplyLayout222
+                    ApplyAmountFormats
+                    ApplyLayout223
                     ProtectFormulaSheets
             Case 2: RefreshTallyStatus
             Case 3: EnsureHelpUpdateGuide
@@ -3233,6 +3234,8 @@ plain:
     ApplyLayout220
     ApplyLayout221
     ApplyLayout222
+    ApplyAmountFormats
+    ApplyLayout223
     ProtectFormulaSheets
     RefreshTallyStatus
     EnsureHelpUpdateGuide
@@ -3295,7 +3298,7 @@ Private Sub ApplyLayout220()
         .NumberFormat = "#,##0;-#,##0;[Color10]0"
     End With
     home.Range("K12:Q12").Interior.Color = RGB(220, 38, 38)
-    home.Range("K15").Value = "yellow + red rows and errors - please check"
+    home.Range("K15").Value = "yellow, red & error rows"
     SetApp "A9", "Layout version"
     SetApp "B9", LAYOUT_TAG
 End Sub
@@ -4071,7 +4074,7 @@ Private Sub RefreshBankSummary()
     Else
         home.Range("AL13").Value = nOk & " / " & (nOk + nBad)
         home.Range("AL13").Font.Color = RGB(220, 38, 38)
-        home.Range("AL15").Value = "check: " & Left$(firstBad, 24) & IIf(nBad > 1, " +" & (nBad - 1), "")
+        home.Range("AL15").Value = "check " & Left$(firstBad, 14) & IIf(Len(firstBad) > 14, "..", "") & IIf(nBad > 1, " +" & (nBad - 1), "")
         home.Range("AL12:AR12").Interior.Color = RGB(220, 38, 38)
     End If
     home.Range("AL13").HorizontalAlignment = -4131
@@ -4135,18 +4138,31 @@ Private Sub ApplyLayout221()
 End Sub
 
 '==============================================================
-'  v2.2.2: rupee accounting format, borders, update history
+'  v2.2.2: comma style amounts, borders, update history
 '==============================================================
-' Rupee amounts in accounting format (falls back to a plain accounting format if the rupee one is not accepted)
+' Amounts in Excel's Comma Style (Alt+H+K): Indian commas as per Windows settings, 2 decimals, no currency symbol
 Private Sub SetRupee(rg As Range)
-    Dim rs As String
     On Error Resume Next
-    rs = "[$" & ChrW(&H20B9) & "-4009]"
-    rg.NumberFormat = "_ " & rs & "* #,##0.00_ ;_ " & rs & "* -#,##0.00_ ;_ " & rs & "* ""-""??_ ;_ @_ "
+    rg.NumberFormat = "_ * #,##0.00_ ;_ * -#,##0.00_ ;_ * ""-""??_ ;_ @_ "
     If Err.Number <> 0 Then
         Err.Clear
         rg.NumberFormat = "_(* #,##0.00_);_(* (#,##0.00);_(* ""-""??_);_(@_)"
     End If
+End Sub
+
+' One-time: amount columns in Comma Style (also replaces the rupee format of an earlier 2.2.2 build)
+Private Sub ApplyAmountFormats()
+    Dim ws As Worksheet
+    On Error Resume Next
+    If CStr(AppData().Range("B13").Value) = "comma" Then Exit Sub
+    Set ws = EntriesSheet()
+    SetRupee ws.Range(ws.Cells(FIRST_ROW, COL_OUT), ws.Cells(FIRST_ROW + 2499, COL_IN))
+    Set ws = FxSheet()
+    SetRupee ws.Range(ws.Cells(S_FIRST, S_DR), ws.Cells(S_FIRST + 2999, S_CR))
+    Set ws = BankSheet()
+    SetRupee ws.Range("C6:E500")
+    SetApp "A13", "Amount format"
+    SetApp "B13", "comma"
 End Sub
 
 ' Thin light-grey grid on a table range
@@ -4157,7 +4173,7 @@ Private Sub GridBorders(rg As Range)
         With rg.Borders(b)
             .LineStyle = 1
             .Weight = 2
-            .Color = RGB(203, 213, 225)
+            .ColorIndex = -4105
         End With
     Next b
 End Sub
@@ -4171,16 +4187,11 @@ Private Sub ApplyLayout222()
     Dim ws As Worksheet, home As Worksheet, hl As Worksheet, f As Range, rg As Range, shp As Object, lastR As Long
     On Error Resume Next
     If CStr(AppData().Range("B12").Value) = "2.2.2" Then Exit Sub
-    ' Entries: amounts
-    Set ws = EntriesSheet()
-    SetRupee ws.Range(ws.Cells(FIRST_ROW, COL_OUT), ws.Cells(FIRST_ROW + 2499, COL_IN))
-    ' Change Ledger: amounts + grid
+    ' Change Ledger: grid
     Set ws = FxSheet()
-    SetRupee ws.Range(ws.Cells(S_FIRST, S_DR), ws.Cells(S_FIRST + 2999, S_CR))
     GridBorders ws.Range(ws.Cells(S_FIRST - 1, 1), ws.Cells(S_FIRST + 2999, S_STATUS))
     ' Bank Balances
     Set ws = BankSheet()
-    SetRupee ws.Range("C6:E500")
     ws.Range("A3").Value = BB_NOTE
     ws.Range("A3").Font.Color = RGB(100, 116, 139)
     GridBorders ws.Range("A5:H" & LastUsedRow(ws, 1, BB_FIRST))
@@ -4234,7 +4245,9 @@ End Sub
 ' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
 Private Function HistoryText() As String
     Dim s As String
-    s = "2.2.2|09-Nov-2026|Cleaner formatting - rupee amounts in accounting format and neat borders on every table|" & _
+    s = "2.2.3|11-Nov-2026|Dark mode - switch the dashboard between light and dark (button at the top right of Home)|" & _
+        "All borders on every table (same as Alt+H+B+A)|Tidier Updates & info box and dashboard cards|Minor bug fixes"
+    s = s & "##2.2.2|09-Nov-2026|Cleaner formatting - amounts with Indian commas and 2 decimals, and neat borders on every table|" & _
         "Last updated date shown on Home (Updates & info)|Update history - this page|Minor bugs fixed"
     s = s & "##2.2.1|09-Nov-2026|Bank balance check - Tally balance vs your bank statement for every bank account (Home card + Bank Balances sheet)|" & _
         "Find duplicates checks the balance first - nothing is suggested for deletion when Tally matches your statement|Minor bugs fixed"
@@ -4319,4 +4332,133 @@ End Sub
 Public Sub ShowUpdateHistory()
     EnsureHistorySheet
     GoSheet "Update History", "B4"
+End Sub
+
+'==============================================================
+'  v2.2.3: all borders, tidier Home, light / dark dashboard
+'==============================================================
+Private Sub ApplyLayout223()
+    Dim ws As Worksheet, home As Worksheet, fc As Object
+    On Error Resume Next
+    If CStr(AppData().Range("B15").Value) = "2.2.3" Then Exit Sub
+    ' All borders (Alt+H+B+A) on every table
+    Set ws = EntriesSheet()
+    GridBorders ws.Range(ws.Cells(FIRST_ROW - 1, 1), ws.Cells(FIRST_ROW + 2499, COL_NOTE))
+    Set ws = FxSheet()
+    GridBorders ws.Range(ws.Cells(S_FIRST - 1, 1), ws.Cells(S_FIRST + 2999, S_STATUS))
+    Set ws = BankSheet()
+    GridBorders ws.Range("A5:H" & LastUsedRow(ws, 1, BB_FIRST))
+    Set ws = ThisWorkbook.Worksheets("Activity Log")
+    If Not ws Is Nothing Then GridBorders ws.Range("B4:F" & LastUsedRow(ws, 2, 5))
+    Set ws = Nothing: Set ws = ThisWorkbook.Worksheets("Ledgers")
+    If Not ws Is Nothing Then GridBorders ws.Range("A1:C" & LastUsedRow(ws, 1, 2))
+    Set ws = Nothing: Set ws = ThisWorkbook.Worksheets("Rules")
+    If Not ws Is Nothing Then GridBorders ws.Range("A1:D" & LastUsedRow(ws, 1, 2))
+    Set ws = Nothing: Set ws = ThisWorkbook.Worksheets("Learned")
+    If Not ws Is Nothing Then GridBorders ws.Range("A1:E" & LastUsedRow(ws, 1, 2))
+    ThisWorkbook.Worksheets("Update History").Range("Z1").Value = ""     ' rebuild history with the new borders
+    ' Home
+    Set home = ThisWorkbook.Worksheets("Home")
+    home.Unprotect SHEET_PW
+    ' Updates & info: version / status / last updated move up one row, so they no longer touch the buttons
+    If CellText(home.Range("Y30").Value) = "" And CellText(home.Range("Y31").Value) = "Installed version" Then
+        home.Range("Y31:AQ33").Cut home.Range("Y30")
+    End If
+    ' Needs review: accent bar red only when something needs review (green when 0)
+    home.Range("K15").Value = "yellow, red & error rows"
+    With home.Range("K12:Q12")
+        .FormatConditions.Delete
+        .Interior.Color = RGB(52, 211, 153)
+        Set fc = .FormatConditions.Add(Type:=2, Formula1:="=$K$13>0")
+        fc.Interior.Color = RGB(220, 38, 38)
+    End With
+    home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
+    home.EnableSelection = 0
+    RefreshBankSummary
+    ThemeButton
+    SetApp "A15", "Layout 2.2.3"
+    SetApp "B15", "2.2.3"
+End Sub
+
+' Light / dark switch at the top right of the dashboard
+Private Sub ThemeButton()
+    Dim home As Worksheet, shp As Object, x As Single, dark As Boolean
+    On Error Resume Next
+    Set home = ThisWorkbook.Worksheets("Home")
+    For Each shp In home.Shapes
+        If shp.Name = "theme_btn" Then shp.Delete
+    Next shp
+    dark = (LCase$(CStr(AppData().Range("B14").Value)) = "dark")
+    x = home.Range("AS1").Left - 128
+    Set shp = NewBox(home, "theme_btn", 5, x, home.Range("A3").Top + 2, 112, 26, IIf(dark, RGB(226, 232, 240), RGB(11, 31, 58)))
+    shp.Adjustments.Item(1) = 0.5
+    shp.Line.Visible = -1: shp.Line.ForeColor.RGB = RGB(20, 184, 166): shp.Line.Weight = 1.25
+    If dark Then
+        StyleText shp, ChrW(&H2600) & "  Light mode", 9.5, RGB(11, 31, 58), True, 2
+    Else
+        StyleText shp, ChrW(&H263E) & "  Dark mode", 9.5, RGB(255, 255, 255), True, 2
+    End If
+    shp.TextFrame2.VerticalAnchor = 3
+    shp.OnAction = "TallyLink.ToggleTheme"
+    shp.Placement = 2
+End Sub
+
+' Swap one colour for another on the dashboard (fills, fonts and borders)
+Private Sub SwapColour(rg As Range, ByVal c1 As Long, ByVal c2 As Long, ByVal doFill As Boolean, ByVal doFont As Boolean, ByVal doBorder As Boolean)
+    Dim e As Variant
+    On Error Resume Next
+    If doFill Then
+        Application.FindFormat.Clear: Application.ReplaceFormat.Clear
+        Application.FindFormat.Interior.Color = c1
+        Application.ReplaceFormat.Interior.Color = c2
+        rg.Replace What:="", Replacement:="", LookAt:=2, SearchFormat:=True, ReplaceFormat:=True
+    End If
+    If doFont Then
+        Application.FindFormat.Clear: Application.ReplaceFormat.Clear
+        Application.FindFormat.Font.Color = c1
+        Application.ReplaceFormat.Font.Color = c2
+        rg.Replace What:="", Replacement:="", LookAt:=2, SearchFormat:=True, ReplaceFormat:=True
+    End If
+    If doBorder Then
+        For Each e In Array(7, 8, 9, 10)
+            Application.FindFormat.Clear: Application.ReplaceFormat.Clear
+            Application.FindFormat.Borders(e).Color = c1
+            Application.ReplaceFormat.Borders(e).Color = c2
+            rg.Replace What:="", Replacement:="", LookAt:=2, SearchFormat:=True, ReplaceFormat:=True
+        Next e
+    End If
+    Application.FindFormat.Clear: Application.ReplaceFormat.Clear
+End Sub
+
+' Button: Dark mode / Light mode (Home only)
+Public Sub ToggleTheme()
+    Dim home As Worksheet, rg As Range, toDark As Boolean, pairs As Variant, i As Long, a As Long, b As Long
+    On Error Resume Next
+    Set home = ThisWorkbook.Worksheets("Home")
+    toDark = (LCase$(CStr(AppData().Range("B14").Value)) <> "dark")
+    Application.ScreenUpdating = False
+    home.Unprotect SHEET_PW
+    Set rg = home.Range("A1:AZ60")
+    ' light colour, dark colour, swap fill / font / border
+    pairs = Array( _
+        Array(RGB(244, 247, 251), RGB(11, 18, 32), True, True, False), _
+        Array(RGB(255, 255, 255), RGB(21, 32, 51), True, False, False), _
+        Array(RGB(230, 250, 246), RGB(15, 59, 58), True, False, False), _
+        Array(RGB(11, 31, 58), RGB(226, 232, 240), False, True, False), _
+        Array(RGB(30, 41, 59), RGB(203, 213, 225), False, True, False), _
+        Array(RGB(100, 116, 139), RGB(148, 163, 184), False, True, False), _
+        Array(RGB(15, 118, 110), RGB(94, 234, 212), False, True, False), _
+        Array(RGB(226, 232, 240), RGB(51, 65, 85), False, False, True))
+    For i = 0 To UBound(pairs)
+        If toDark Then a = pairs(i)(0): b = pairs(i)(1) Else a = pairs(i)(1): b = pairs(i)(0)
+        SwapColour rg, a, b, pairs(i)(2), pairs(i)(3), pairs(i)(4)
+    Next i
+    ' navy tile ("Post to Tally") keeps white text; teal tile keeps its colours
+    home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
+    home.EnableSelection = 0
+    SetApp "A14", "Dashboard theme"
+    SetApp "B14", IIf(toDark, "dark", "light")
+    ThemeButton
+    Application.ScreenUpdating = True
+    LogAct "Dashboard theme", IIf(toDark, "Dark mode", "Light mode")
 End Sub

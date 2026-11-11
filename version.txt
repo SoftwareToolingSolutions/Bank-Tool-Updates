@@ -1,4 +1,3 @@
-2.2.2
-Cleaner formatting - rupee amounts in accounting format and neat borders on every table
-Minor bugs fixed
-New: Update history - see the features added over the past few updates
+2.2.3
+Minor bug fixes
+New: Dark mode - switch the dashboard between light and dark with the button at the top right of Home
