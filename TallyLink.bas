@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.3.1"
+Public Const APP_VERSION As String = "2.3.2"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -53,6 +53,7 @@ Private Const S_GUID As Long = 11
 Private Const CLR_TALLYONLY As Long = 11389944   ' orange: change this one in Tally
 Private gLastDayBook As String
 Private gNoAnim As Boolean
+Private gLastErr As String
 
 ' Learned memory (fast in-memory copy of the Learned sheet)
 Private Const LH_SIZE As Long = 65536
@@ -61,10 +62,7 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Dark mode now covers every sheet, not just the dashboard|" & _
-    "WhatsApp: choose App or Browser (uses your WhatsApp Web login)|" & _
-    "Clearer, easier-to-read pop-ups for email, WhatsApp and the mail password|" & _
-    "Minor bug fixes"
+Private Const WHATS_NEW As String = "Make suspense file fixed - faster and more reliable|Smoother screen after long actions (no left-over text)|Minor bug fixes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -3602,6 +3600,8 @@ End Sub
 Public Sub ProgressHide()
     gProgOn = False
     DeleteShapes "pfy_"
+    Application.ScreenUpdating = True
+    DoEvents
 End Sub
 
 ' Finish nicely: show 100% / Done and keep the card readable for a moment
@@ -4268,7 +4268,8 @@ End Sub
 ' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
 Private Function HistoryText() As String
     Dim s As String
-    s = "2.3.1|13-Nov-2026|Dark mode for every sheet|WhatsApp opens in App or Browser (WhatsApp Web) - your choice|" & _
+    s = "2.3.2|13-Nov-2026|Make suspense file fixed - faster and more reliable|Smoother screen after long actions|Minor bug fixes"
+    s = s & "##2.3.1|13-Nov-2026|Dark mode for every sheet|WhatsApp opens in App or Browser (WhatsApp Web) - your choice|" & _
         "Readable info cards for the suspense file, email and WhatsApp steps|Reminders: 2-Step Verification + App password for email, log in to WhatsApp first|" & _
         "Password window says your password stays on this PC|Tidier Updates & info box|Minor bug fixes"
     s = s & "##2.3.0|12-Nov-2026|Suspense file - Excel of all Suspense entries with a dropdown of every ledger and a Remarks column|" & _
@@ -4541,17 +4542,21 @@ End Function
 ' Build the Excel for the person who knows the entries. Returns the saved path ("" if failed)
 Private Function BuildSuspenseWorkbook(vc As Collection, ByVal sus As String, ByVal dFrom As Date, ByVal dTo As Date) As String
     Dim wb As Workbook, ws As Worksheet, wl As Worksheet, src As Worksheet, v As Variant, r As Long, k As Long
-    Dim lastL As Long, lv As Variant, n As Long, co As String, path As String, hd As Variant, i As Long, nRows As Long
+    Dim lastL As Long, lv As Variant, n As Long, co As String, path As String, hd As Variant, i As Long, nRows As Long, stp As String
+    gLastErr = ""
     On Error GoTo fail
     co = SettingValue("CompanyName")
     If co = "" Then co = "Company"
     Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    stp = "creating the new workbook"
     Set wb = Workbooks.Add(-4167)
     Set ws = wb.Worksheets(1)
     ws.Name = "Suspense"
     Set wl = wb.Worksheets.Add(After:=ws)
     wl.Name = "Ledgers"
     ' --- ledger list as on today
+    stp = "copying the ledger list"
     Set src = ThisWorkbook.Worksheets("Ledgers")
     lastL = src.Cells(src.Rows.Count, 1).End(xlUp).Row
     wl.Cells.Font.Name = "Segoe UI": wl.Cells.Font.Size = 10
@@ -4575,6 +4580,7 @@ Private Function BuildSuspenseWorkbook(vc As Collection, ByVal sus As String, By
     wl.Columns("A").ColumnWidth = 45: wl.Columns("B").ColumnWidth = 30
     GridBorders wl.Range("A2:B" & (n + 2))
     ' --- suspense sheet
+    stp = "writing the entries"
     ws.Cells.Font.Name = "Segoe UI": ws.Cells.Font.Size = 10
     ws.Range("A1").Value = "Suspense entries - " & co
     ws.Range("A1").Font.Bold = True: ws.Range("A1").Font.Size = 15: ws.Range("A1").Font.Color = RGB(255, 255, 255)
@@ -4614,6 +4620,7 @@ Private Function BuildSuspenseWorkbook(vc As Collection, ByVal sus As String, By
     ws.Range("I6:I" & r - 1).Interior.Color = RGB(255, 248, 225)
     ws.Range("J6:J" & r - 1).Interior.Color = RGB(255, 255, 255)
     ws.Range("J6:J" & r - 1).WrapText = True
+    stp = "adding the ledger dropdown"
     With ws.Range("I6:I" & r - 1).Validation
         .Delete
         .Add Type:=3, AlertStyle:=2, Operator:=1, Formula1:="=LedgerList"
@@ -4632,33 +4639,38 @@ Private Function BuildSuspenseWorkbook(vc As Collection, ByVal sus As String, By
     With ws.Cells(r + 1, 1).Font
         .Italic = True: .Size = 8: .Color = RGB(148, 163, 184)
     End With
-    ws.PageSetup.CenterFooter = "&I&8Generated by " & APP_NAME
-    ws.PageSetup.Orientation = 2
+    ' cosmetic steps - never stop the file for these
+    On Error Resume Next
+    wb.Activate
     ws.Activate
     ws.Range("A6").Select
     ActiveWindow.FreezePanes = True
     ActiveWindow.DisplayGridlines = False
-    ' only the yellow and remarks columns can be typed in
+    ws.Range("A5:J" & r - 1).AutoFilter
     ws.Cells.Locked = True
     ws.Range("I6:J" & r - 1).Locked = False
-    ws.Range("A5:J" & r - 1).AutoFilter
     ws.Protect DrawingObjects:=True, Contents:=True, AllowFiltering:=True, AllowFormattingColumns:=True, AllowFormattingRows:=True
-    path = DocsFolder() & "\" & FileSafe("Suspense - " & co & " - " & Format$(Date, "dd-mm-yyyy")) & ".xlsx"
+    Err.Clear
+    On Error GoTo fail
+    stp = "saving the file"
+    path = DocsFolder() & "\" & FileSafe("Suspense - " & co & " - " & Format$(Now, "dd-mm-yyyy") & " " & Format$(Now, "hhmm")) & ".xlsx"
     Application.DisplayAlerts = False
     wb.SaveAs fileName:=path, FileFormat:=51
     Application.DisplayAlerts = True
     wb.Close SaveChanges:=False
     ThisWorkbook.Activate
+    Application.EnableEvents = True
     Application.ScreenUpdating = True
     BuildSuspenseWorkbook = path
     Exit Function
 fail:
+    gLastErr = "Step: " & stp & vbCrLf & "Error " & Err.Number & ": " & Err.Description
     Application.DisplayAlerts = True
     On Error Resume Next
     If Not wb Is Nothing Then wb.Close SaveChanges:=False
     ThisWorkbook.Activate
+    Application.EnableEvents = True
     Application.ScreenUpdating = True
-    MsgBox "The suspense file could not be made: " & Err.Description, vbExclamation, APP_NAME
 End Function
 
 '================ BUTTON (Change Ledger): Make suspense file ================
@@ -4681,7 +4693,13 @@ Public Sub MakeSuspenseFile()
     End If
     ProgressUpdate 0.6, "Building the Excel file (" & vc.Count & " entries)..."
     path = BuildSuspenseWorkbook(vc, sus, CDate(dFrom), CDate(dTo))
-    If path = "" Then ProgressHide: Exit Sub
+    If path = "" Then
+        ProgressHide
+        MsgBox "The suspense file could not be made." & vbCrLf & vbCrLf & gLastErr & vbCrLf & vbCrLf & _
+            "Please send a screenshot of this message.", vbExclamation, APP_NAME
+        LogAct "Suspense file", "Failed - " & Replace(gLastErr, vbCrLf, " | ")
+        Exit Sub
+    End If
     ProgressDone "File ready"
     LogAct "Suspense file", vc.Count & " entries -> " & Mid$(path, InStrRev(path, "\") + 1), vc.Count
     SendSuspenseDialog path, CDate(dFrom), CDate(dTo), vc.Count
