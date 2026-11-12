@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.3.4"
+Public Const APP_VERSION As String = "2.3.5"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -63,7 +63,7 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Update in Tally finds the voucher much more reliably (no more 'Voucher not found' for normal entries)|Minor bug fixes"
+Private Const WHATS_NEW As String = "Update in Tally now reads every Day Book correctly (fixes 'Day Book reply could not be read')|Minor bug fixes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -485,7 +485,7 @@ Private Function LoadLedgersCore(ByVal silent As Boolean) As Long
     Set re = CreateObject("VBScript.RegExp")
     re.Global = True
     re.Pattern = "&#([0-8]|1[124-9]|2[0-9]|3[01]);"
-    resp = re.Replace(resp, "")
+    resp = CleanTallyXml(resp)
 
     Set doc = CreateObject("MSXML2.DOMDocument.6.0")
     doc.async = False
@@ -2115,7 +2115,7 @@ Private Function FetchBankVouchers(ByVal bank As String, ByVal dFrom As Date, By
     Set re = CreateObject("VBScript.RegExp")
     re.Global = True
     re.Pattern = "&#([0-8]|1[124-9]|2[0-9]|3[01]);"
-    resp = re.Replace(resp, "")
+    resp = CleanTallyXml(resp)
     Set doc = CreateObject("MSXML2.DOMDocument.6.0")
     doc.async = False
     If Not doc.LoadXML(resp) Then
@@ -2783,17 +2783,37 @@ Private Function DayBookDoc(ByVal d As Date, ByRef errTxt As String) As Object
     Set re = CreateObject("VBScript.RegExp")
     re.Global = True
     re.Pattern = "&#([0-8]|1[124-9]|2[0-9]|3[01]);"
-    resp = re.Replace(resp, "")
+    resp = CleanTallyXml(resp)
     Set doc = CreateObject("MSXML2.DOMDocument.6.0")
     doc.async = False
     doc.preserveWhiteSpace = True
     If Not doc.LoadXML(resp) Then
-        errTxt = "Day Book reply could not be read"
+        errTxt = "Day Book reply could not be read (" & Trim$(Replace(doc.parseError.reason, vbCrLf, " ")) & " - line " & doc.parseError.Line & ")"
         SaveDebug "Day Book " & Format$(d, "dd-mm-yyyy"), resp
         Exit Function
     End If
     gLastDayBook = resp
     Set DayBookDoc = doc
+End Function
+
+' Make a Tally reply safe for the XML reader: invalid character codes, control characters,
+' and the UDF: prefix of Tally custom fields (sometimes sent without its declaration)
+Private Function CleanTallyXml(ByVal resp As String) As String
+    Dim re As Object, p As Long
+    Set re = CreateObject("VBScript.RegExp")
+    re.Global = True
+    re.IgnoreCase = True
+    re.Pattern = "&#([0-8]|1[124-9]|2[0-9]|3[01]);"
+    resp = re.Replace(resp, "")
+    re.Pattern = "&#x(0?[0-8bce]|0?f|1[0-9a-f]);"
+    resp = re.Replace(resp, "")
+    re.Pattern = "[\x00-\x08\x0B\x0C\x0E-\x1F]"
+    resp = re.Replace(resp, "")
+    If InStr(1, resp, "UDF:", vbTextCompare) > 0 And InStr(1, resp, "xmlns:UDF", vbTextCompare) = 0 Then
+        p = InStr(1, resp, "<ENVELOPE", vbTextCompare)
+        If p > 0 Then resp = Left$(resp, p + 8) & " xmlns:UDF=""TallyUDF""" & Mid$(resp, p + 9)
+    End If
+    CleanTallyXml = resp
 End Function
 
 Private Function NodeText(ByVal n As Object, ByVal tag As String) As String
@@ -3921,7 +3941,7 @@ Private Function TallyBankBalance(ByVal bank As String, ByVal d As Date, ByRef o
     Set re = CreateObject("VBScript.RegExp")
     re.Global = True
     re.Pattern = "&#([0-8]|1[124-9]|2[0-9]|3[01]);"
-    resp = re.Replace(resp, "")
+    resp = CleanTallyXml(resp)
     Set doc = CreateObject("MSXML2.DOMDocument.6.0")
     doc.async = False
     If Not doc.LoadXML(resp) Then Exit Function
@@ -4307,7 +4327,8 @@ End Sub
 ' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
 Private Function HistoryText() As String
     Dim s As String
-    s = "2.3.4|14-Nov-2026|Update in Tally finds the voucher reliably (voucher number + amount + type)|Minor bug fixes"
+    s = "2.3.5|15-Nov-2026|Day Book replies with special characters or Tally custom fields are read correctly|Minor bug fixes"
+    s = s & "##2.3.4|14-Nov-2026|Update in Tally finds the voucher reliably (voucher number + amount + type)|Minor bug fixes"
     s = s & "##2.3.3|14-Nov-2026|Dark mode removed to keep the file fast|Minor bug fixes"
     s = s & "##2.3.2|13-Nov-2026|Make suspense file fixed - faster and more reliable|Smoother screen after long actions|Minor bug fixes"
     s = s & "##2.3.1|13-Nov-2026|Dark mode for every sheet (removed in 2.3.3)|WhatsApp opens in App or Browser (WhatsApp Web) - your choice|" & _
