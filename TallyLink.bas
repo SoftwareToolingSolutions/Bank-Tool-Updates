@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.3.0"
+Public Const APP_VERSION As String = "2.3.1"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -26,7 +26,7 @@ Private Const COL_Q As Long = 12          ' hidden: match quality 3 green / 2 ye
 Private Const SHEET_PW As String = "postify"
 Private Const LAYOUT_TAG As String = "2.2.0"
 Private Const BB_SHEET As String = "Bank Balances"
-Private Const FORMS_VER As String = "1"
+Private Const FORMS_VER As String = "2"
 Private Const SUSP_MARK As String = "POSTIFY-SUSPENSE"
 Private Const BB_FIRST As Long = 6
 Private Const BB_NOTE As String = "* Statement balance is as per the bank statement provided by you (balance after the last transaction imported), " & _
@@ -61,9 +61,9 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "New: Suspense file - one click makes an Excel of your Suspense entries with a ledger dropdown for every entry (Change Ledger > Make suspense file)|" & _
-    "Send it straight from Postify by Email or WhatsApp, or Save as anywhere|" & _
-    "Import the filled file back - the chosen ledgers go straight into Change Ledger, ready for Update in Tally|" & _
+Private Const WHATS_NEW As String = "Dark mode now covers every sheet, not just the dashboard|" & _
+    "WhatsApp: choose App or Browser (uses your WhatsApp Web login)|" & _
+    "Clearer, easier-to-read pop-ups for email, WhatsApp and the mail password|" & _
     "Minor bug fixes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
@@ -160,6 +160,7 @@ End Function
 Private Sub SetStatus(ws As Worksheet, ByVal r As Long, ByVal msg As String, ByVal clr As Long)
     ws.Cells(r, COL_STATUS).Value = msg
     ws.Cells(r, COL_STATUS).Interior.Color = clr
+    ws.Cells(r, COL_STATUS).Font.Color = RGB(30, 41, 59)
     FitRow ws, r
 End Sub
 
@@ -1651,6 +1652,8 @@ Private Sub FillMatch(ws As Worksheet, ByVal r As Long, ByVal bank As String)
     ws.Cells(r, COL_NOTE).Value = note
     ws.Cells(r, COL_NOTE).Interior.Color = clr
     ws.Cells(r, COL_PARTY).Interior.Color = clr
+    ws.Cells(r, COL_NOTE).Font.Color = RGB(30, 41, 59)
+    ws.Cells(r, COL_PARTY).Font.Color = RGB(30, 41, 59)
     ws.Cells(r, COL_Q).Value = q
     FitRow ws, r
 End Sub
@@ -2448,6 +2451,7 @@ Public Sub FindDuplicatesInTally()
     Application.DisplayAlerts = True
     Set rp = ThisWorkbook.Worksheets.Add(After:=ws)
     rp.Name = "Tally Duplicates"
+    DarkIfNeeded rp
     rp.Range("A1").Value = "Possible duplicate vouchers in '" & bank & "'  (" & info & ")"
     rp.Range("A1").Font.Bold = True
     rp.Range("A2").Value = "Same amount and direction within " & win & " day(s), more copies in Tally than in the statement. 'Made by this file' = narration matches a row posted from the Entries sheet. Delete the suggested ones in Tally: Day Book > select voucher > Alt+D."
@@ -2717,7 +2721,7 @@ Private Function LoadFixCore(ByVal silent As Boolean) As String
             ws.Cells(r, S_NEW).Value = Mid$(keep, p1, p2 - p1)
         End If
         If v(9) > 1 Then
-            ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Interior.Color = CLR_TALLYONLY
+            ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Interior.Color = CLR_TALLYONLY: ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Font.Color = RGB(30, 41, 59)
             ws.Cells(r, S_STATUS).Value = "This voucher has " & v(9) & " lines of '" & led & "' - change it in Tally"
             nMulti = nMulti + 1
         End If
@@ -2850,6 +2854,7 @@ End Sub
 Private Sub SetFxStatus(ws As Worksheet, ByVal r As Long, ByVal msg As String, ByVal clr As Long)
     ws.Cells(r, S_STATUS).Value = msg
     ws.Cells(r, S_STATUS).Interior.Color = clr
+    ws.Cells(r, S_STATUS).Font.Color = RGB(30, 41, 59)
     FitRow ws, r
 End Sub
 
@@ -2941,7 +2946,7 @@ Public Sub UpdateLedgerInTally()
                 If nHit = 0 And nHit2 > 0 Then nHit = nHit2: Set hit = hit2: Set hitLine = hitLine2: nHit2 = 0: Set hit2 = Nothing: Set hitLine2 = Nothing
                 If nHit2 > nHit Then nHit = nHit2
                 If nHit <> 1 Then
-                    ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Interior.Color = CLR_TALLYONLY
+                    ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Interior.Color = CLR_TALLYONLY: ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Font.Color = RGB(30, 41, 59)
                     SetFxStatus ws, r, "This voucher has " & nHit & " lines of '" & oldL & "' - change it in Tally", CLR_TALLYONLY: nErr = nErr + 1
                     GoTo nextRow
                 End If
@@ -3216,6 +3221,7 @@ Private Sub StartupWithSplash()
                     ApplyAmountFormats
                     ApplyLayout223
                     ApplyLayout230
+                    ApplyLayout231
                     ProtectFormulaSheets
             Case 2: RefreshTallyStatus
             Case 3: EnsureHelpUpdateGuide
@@ -3245,6 +3251,7 @@ plain:
     ApplyAmountFormats
     ApplyLayout223
     ApplyLayout230
+    ApplyLayout231
     ProtectFormulaSheets
     RefreshTallyStatus
     EnsureHelpUpdateGuide
@@ -3797,7 +3804,7 @@ End Sub
 
 Public Sub WhatsNewGotIt()
     WhatsNewHide
-    If CStr(AppData().Range("B17").Value) = "" Then MailIntro
+    If CStr(AppData().Range("B17").Value) <> "card" Then MailIntro
 End Sub
 
 Public Sub WhatsNewNoop()
@@ -3953,6 +3960,7 @@ Private Function BankSheet() As Worksheet
     StyleText shp, ChrW(&H2302) & "  Home", 10, RGB(15, 118, 110), True, 2
     shp.TextFrame2.VerticalAnchor = 3: shp.OnAction = "TallyLink.GoHome": shp.Placement = 2
     ActiveWindow.DisplayGridlines = False
+    DarkIfNeeded ws
     On Error Resume Next
     If Not back Is Nothing Then back.Activate
     gNoAnim = False
@@ -3998,6 +4006,7 @@ Private Sub BBCheckRow(ws As Worksheet, ByVal r As Long)
     End If
     ws.Cells(r, 6).Value = st
     ws.Range(ws.Cells(r, 5), ws.Cells(r, 6)).Interior.Color = clr
+    ws.Range(ws.Cells(r, 5), ws.Cells(r, 6)).Font.Color = RGB(30, 41, 59)
     ws.Cells(r, 7).Value = Now
 End Sub
 
@@ -4259,7 +4268,10 @@ End Sub
 ' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
 Private Function HistoryText() As String
     Dim s As String
-    s = "2.3.0|12-Nov-2026|Suspense file - Excel of all Suspense entries with a dropdown of every ledger and a Remarks column|" & _
+    s = "2.3.1|13-Nov-2026|Dark mode for every sheet|WhatsApp opens in App or Browser (WhatsApp Web) - your choice|" & _
+        "Readable info cards for the suspense file, email and WhatsApp steps|Reminders: 2-Step Verification + App password for email, log in to WhatsApp first|" & _
+        "Password window says your password stays on this PC|Tidier Updates & info box|Minor bug fixes"
+    s = s & "##2.3.0|12-Nov-2026|Suspense file - Excel of all Suspense entries with a dropdown of every ledger and a Remarks column|" & _
         "Send it by Email (your own mailbox) or WhatsApp, or Save as|Import the filled file back into Change Ledger|" & _
         "Email & WhatsApp settings with saved recipient, subject and message|Minor bug fixes"
     s = s & "##2.2.3|11-Nov-2026|Dark mode - switch the dashboard between light and dark (button at the top right of Home)|" & _
@@ -4340,6 +4352,11 @@ Private Sub EnsureHistorySheet()
         r = r + 1
     Next v
     ActiveWindow.DisplayGridlines = False
+    If IsDark() Then
+        SwapPairs ws.Range("A1:AZ" & r + 5), True
+        ws.Range("A" & r & ":E" & r + 300).Interior.Color = RGB(11, 18, 32)
+        SheetBackground ws, True
+    End If
     If Not back Is Nothing Then back.Activate
     gNoAnim = False
     Application.ScreenUpdating = su
@@ -4447,38 +4464,7 @@ Private Sub SwapColour(rg As Range, ByVal c1 As Long, ByVal c2 As Long, ByVal do
     Application.FindFormat.Clear: Application.ReplaceFormat.Clear
 End Sub
 
-' Button: Dark mode / Light mode (Home only)
-Public Sub ToggleTheme()
-    Dim home As Worksheet, rg As Range, toDark As Boolean, pairs As Variant, i As Long, a As Long, b As Long
-    On Error Resume Next
-    Set home = ThisWorkbook.Worksheets("Home")
-    toDark = (LCase$(CStr(AppData().Range("B14").Value)) <> "dark")
-    Application.ScreenUpdating = False
-    home.Unprotect SHEET_PW
-    Set rg = home.Range("A1:AZ60")
-    ' light colour, dark colour, swap fill / font / border
-    pairs = Array( _
-        Array(RGB(244, 247, 251), RGB(11, 18, 32), True, True, False), _
-        Array(RGB(255, 255, 255), RGB(21, 32, 51), True, False, False), _
-        Array(RGB(230, 250, 246), RGB(15, 59, 58), True, False, False), _
-        Array(RGB(11, 31, 58), RGB(226, 232, 240), False, True, False), _
-        Array(RGB(30, 41, 59), RGB(203, 213, 225), False, True, False), _
-        Array(RGB(100, 116, 139), RGB(148, 163, 184), False, True, False), _
-        Array(RGB(15, 118, 110), RGB(94, 234, 212), False, True, False), _
-        Array(RGB(226, 232, 240), RGB(51, 65, 85), False, False, True))
-    For i = 0 To UBound(pairs)
-        If toDark Then a = pairs(i)(0): b = pairs(i)(1) Else a = pairs(i)(1): b = pairs(i)(0)
-        SwapColour rg, a, b, pairs(i)(2), pairs(i)(3), pairs(i)(4)
-    Next i
-    ' navy tile ("Post to Tally") keeps white text; teal tile keeps its colours
-    home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
-    home.EnableSelection = 0
-    SetApp "A14", "Dashboard theme"
-    SetApp "B14", IIf(toDark, "dark", "light")
-    ThemeButton
-    Application.ScreenUpdating = True
-    LogAct "Dashboard theme", IIf(toDark, "Dark mode", "Light mode")
-End Sub
+
 
 '==============================================================
 '  v2.3: SUSPENSE FILE  (make -> Email / WhatsApp / Save as -> import back)
@@ -4745,10 +4731,13 @@ Private Sub SendSuspenseDialog(ByVal path As String, ByVal dFrom As Date, ByVal 
         f.Controls("txtSub").Text = cSub: f.Controls("txtSub").Tag = sSub
         f.Controls("txtMsg").Text = cMsg: f.Controls("txtMsg").Tag = sMsg
         f.Controls("lblNote").Caption = note
+        f.Controls("optWeb").Value = (LCase$(SettingValue("WaOpenIn")) <> "app")
+        f.Controls("optApp").Value = (LCase$(SettingValue("WaOpenIn")) = "app")
         f.Show
         ch = f.Choice
         cTo = Trim$(f.Controls("txtTo").Text): cMob = Trim$(f.Controls("txtMob").Text)
         cSub = f.Controls("txtSub").Text: cMsg = f.Controls("txtMsg").Text
+        If ch = "wa" Then SetSetting "WaOpenIn", IIf(f.Controls("optApp").Value, "App", "Browser")
         If f.Controls("chkDefault").Value And ch <> "" Then
             SetSetting "SendToEmail", cTo: SetSetting "SendToMobile", cMob
             sTo = cTo: sMob = cMob
@@ -4799,7 +4788,7 @@ Private Function UrlEnc(ByVal s As String) As String
 End Function
 
 Private Function DoWhatsApp(ByVal path As String, ByVal mob As String, ByVal msg As String) As Boolean
-    Dim d As String, i As Long, ch As String, url As String
+    Dim d As String, i As Long, ch As String, useApp As Boolean, txt As String
     For i = 1 To Len(mob)
         ch = Mid$(mob, i, 1)
         If ch Like "#" Then d = d & ch
@@ -4807,19 +4796,26 @@ Private Function DoWhatsApp(ByVal path As String, ByVal mob As String, ByVal msg
     If Len(d) = 11 And Left$(d, 1) = "0" Then d = Mid$(d, 2)
     If Len(d) = 10 Then d = "91" & d
     If Len(d) < 11 Then MsgBox "Please enter a valid mobile number (10 digits, or with country code).", vbExclamation, APP_NAME: Exit Function
-    msg = Replace(msg, vbCrLf, vbLf)
+    txt = UrlEnc(Replace(msg, vbCrLf, vbLf))
+    useApp = (LCase$(SettingValue("WaOpenIn")) = "app")
     On Error Resume Next
-    url = "whatsapp://send?phone=" & d & "&text=" & UrlEnc(msg)
-    ThisWorkbook.FollowHyperlink url
-    If Err.Number <> 0 Then
-        Err.Clear
-        ThisWorkbook.FollowHyperlink "https://wa.me/" & d & "?text=" & UrlEnc(msg)
+    If useApp Then
+        ThisWorkbook.FollowHyperlink "whatsapp://send?phone=" & d & "&text=" & txt
+        If Err.Number <> 0 Then Err.Clear: useApp = False
     End If
+    If Not useApp Then ThisWorkbook.FollowHyperlink "https://web.whatsapp.com/send?phone=" & d & "&text=" & txt
     Shell "explorer.exe /select,""" & path & """", vbNormalFocus
     On Error GoTo 0
-    LogAct "Suspense file", "WhatsApp opened for +" & d
-    MsgBox "WhatsApp is opening with the message for +" & d & "." & vbCrLf & vbCrLf & _
-        "The file's folder is open too - drag '" & Mid$(path, InStrRev(path, "\") + 1) & "' into the chat (or use the paperclip), then press Send.", vbInformation, APP_NAME
+    LogAct "Suspense file", "WhatsApp (" & IIf(useApp, "app", "browser") & ") opened for +" & d
+    InfoCard "WhatsApp is opening", "Chat with +" & d & " - the message is already typed in.", Array( _
+        "#Send the file", _
+        "1.   The folder with your file is open: " & Mid$(path, InStrRev(path, "") + 1), _
+        "2.   Drag the file into the WhatsApp chat (or click the paperclip / + and choose it).", _
+        "3.   Press Send.", _
+        "#If you see a QR code", _
+        "WhatsApp is not logged in " & IIf(useApp, "in the app", "in this browser") & ". On your phone: WhatsApp > Linked devices > Link a device, scan the code, then make the file again and send.", _
+        "Tip: the pop-up lets you choose Browser (WhatsApp Web) or the WhatsApp app."), _
+        Array(Array("Got it", "TallyLink.InfoCardHide", "teal"))
     DoWhatsApp = True
 End Function
 
@@ -4829,7 +4825,7 @@ Private Function PwdPrompt(ByVal em As String, ByRef remember As Boolean, ByRef 
     cancelled = False
     If FormReady("PfyPwd") Then
         Set f = VBA.UserForms.Add("PfyPwd")
-        f.Controls("lblP").Caption = "Mail password for " & em & vbCrLf & "(Gmail / Yahoo: use the 16-letter App password)"
+        f.Controls("lblP").Caption = "Mail password for" & vbCrLf & em
         f.Controls("chkRem").Value = remember
         f.Show
         If f.Choice = "ok" Then
@@ -4880,6 +4876,7 @@ Private Function DoSendEmail(ByVal path As String, ByVal sendTo As String, ByVal
         pwd = PwdPrompt(em, remember, cancelled)
         If cancelled Or pwd = "" Then Exit Function
     End If
+    If InStr(1, server, "gmail", vbTextCompare) > 0 Or InStr(1, server, "yahoo", vbTextCompare) > 0 Then pwd = Replace(pwd, " ", "")
     ProgressShow "Sending email", "Connecting to " & server & "..."
     On Error GoTo fail
     Set cfg = CreateObject("CDO.Configuration")
@@ -5062,47 +5059,75 @@ End Function
 
 ' Creates the two small windows (needs "Trust access to the VBA project object model", same as updates)
 Private Function BuildForms() As Boolean
-    Dim vbp As Object, comp As Object, c As Object, cnt As Long, code As String
+    Dim vbp As Object, comp As Object, c As Object, cnt As Long, code As String, nm As Variant
     On Error Resume Next
     Set vbp = ThisWorkbook.VBProject
     cnt = vbp.VBComponents.Count
     If Err.Number <> 0 Or cnt = 0 Then Exit Function
     Err.Clear
-    ' remove old versions
-    vbp.VBComponents.Remove vbp.VBComponents("PfySend")
-    vbp.VBComponents.Remove vbp.VBComponents("PfyPwd")
+    ' remove old versions (renamed first, so the names are free straight away)
+    For Each nm In Array("PfySend", "PfyPwd")
+        Set comp = Nothing
+        Set comp = vbp.VBComponents(nm)
+        If Not comp Is Nothing Then
+            comp.Name = nm & "_old" & Format$(Timer * 100, "0")
+            vbp.VBComponents.Remove comp
+        End If
+    Next nm
     Err.Clear
     On Error GoTo fail
     ' --- PfySend
     Set comp = vbp.VBComponents.Add(3)
     comp.Name = "PfySend"
     comp.Properties("Caption").Value = APP_NAME & " - send the suspense file"
-    comp.Properties("Width").Value = 440
-    comp.Properties("Height").Value = 420
+    comp.Properties("Width").Value = 500
+    comp.Properties("Height").Value = 560
     comp.Properties("BackColor").Value = RGB(244, 247, 251)
-    Set c = AddCtl(comp, "Forms.Label.1", "lblHead", 14, 10, 400, 18, "Send the suspense file")
-    c.Font.Size = 11: c.Font.Bold = True: c.ForeColor = RGB(11, 31, 58)
-    Set c = AddCtl(comp, "Forms.Label.1", "lblFile", 14, 30, 400, 16, "File ready")
-    c.ForeColor = RGB(100, 116, 139)
-    Set c = AddCtl(comp, "Forms.Label.1", "lblTo", 14, 56, 100, 14, "Email to")
-    Set c = AddCtl(comp, "Forms.TextBox.1", "txtTo", 120, 52, 296, 20)
-    Set c = AddCtl(comp, "Forms.Label.1", "lblMob", 14, 82, 100, 14, "WhatsApp mobile")
-    Set c = AddCtl(comp, "Forms.TextBox.1", "txtMob", 120, 78, 296, 20)
-    Set c = AddCtl(comp, "Forms.Label.1", "lblSub", 14, 108, 100, 14, "Subject")
-    Set c = AddCtl(comp, "Forms.TextBox.1", "txtSub", 120, 104, 296, 20)
-    Set c = AddCtl(comp, "Forms.Label.1", "lblMsg", 14, 134, 100, 14, "Message")
-    Set c = AddCtl(comp, "Forms.TextBox.1", "txtMsg", 120, 130, 296, 120)
-    c.MultiLine = True: c.EnterKeyBehavior = True: c.WordWrap = True: c.ScrollBars = 2
-    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnReset", 120, 256, 120, 20, "Use saved details")
-    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkDefault", 250, 256, 170, 20, "Save these as my default")
-    Set c = AddCtl(comp, "Forms.Label.1", "lblNote", 14, 282, 402, 30, "")
-    c.ForeColor = RGB(180, 83, 9): c.WordWrap = True
-    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnEmail", 14, 318, 128, 30, "Send Email")
-    c.BackColor = RGB(20, 184, 166): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True
-    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnWa", 150, 318, 128, 30, "Send on WhatsApp")
-    c.BackColor = RGB(37, 211, 102): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True
-    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnSave", 286, 318, 130, 30, "Save as...")
-    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnClose", 316, 356, 100, 22, "Close")
+    Set c = AddCtl(comp, "Forms.Label.1", "lblHead", 16, 12, 460, 22, "Send the suspense file")
+    c.Font.Size = 14: c.Font.Bold = True: c.ForeColor = RGB(11, 31, 58)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblFile", 16, 38, 460, 18, "File ready")
+    c.Font.Size = 10: c.ForeColor = RGB(100, 116, 139)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblTo", 16, 70, 120, 18, "Email to")
+    c.Font.Size = 10.5: c.Font.Bold = True: c.ForeColor = RGB(30, 41, 59)
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtTo", 140, 66, 336, 24)
+    c.Font.Size = 10.5
+    Set c = AddCtl(comp, "Forms.Label.1", "lblMob", 16, 104, 120, 18, "WhatsApp mobile")
+    c.Font.Size = 10.5: c.Font.Bold = True: c.ForeColor = RGB(30, 41, 59)
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtMob", 140, 100, 336, 24)
+    c.Font.Size = 10.5
+    Set c = AddCtl(comp, "Forms.Label.1", "lblWa", 16, 136, 120, 18, "WhatsApp opens in")
+    c.Font.Size = 10.5: c.Font.Bold = True: c.ForeColor = RGB(30, 41, 59)
+    Set c = AddCtl(comp, "Forms.OptionButton.1", "optWeb", 140, 132, 170, 22, "Browser (WhatsApp Web)")
+    c.Font.Size = 10: c.GroupName = "wa"
+    Set c = AddCtl(comp, "Forms.OptionButton.1", "optApp", 316, 132, 160, 22, "WhatsApp app")
+    c.Font.Size = 10: c.GroupName = "wa"
+    Set c = AddCtl(comp, "Forms.Label.1", "lblSub", 16, 170, 120, 18, "Subject")
+    c.Font.Size = 10.5: c.Font.Bold = True: c.ForeColor = RGB(30, 41, 59)
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtSub", 140, 166, 336, 24)
+    c.Font.Size = 10.5
+    Set c = AddCtl(comp, "Forms.Label.1", "lblMsg", 16, 204, 120, 18, "Message")
+    c.Font.Size = 10.5: c.Font.Bold = True: c.ForeColor = RGB(30, 41, 59)
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtMsg", 140, 200, 336, 150)
+    c.MultiLine = True: c.EnterKeyBehavior = True: c.WordWrap = True: c.ScrollBars = 2: c.Font.Size = 10.5
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnReset", 140, 358, 150, 24, "Use saved details")
+    c.Font.Size = 10
+    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkDefault", 300, 358, 180, 24, "Save these as my default")
+    c.Font.Size = 10
+    Set c = AddCtl(comp, "Forms.Label.1", "lblTips", 16, 392, 460, 58, _
+        "Before you send:" & vbCrLf & _
+        "   Email - 2-Step Verification must be ON and you need an App password (not your normal password)." & vbCrLf & _
+        "   WhatsApp - log in to WhatsApp on this PC first (in the browser or the app you choose above).")
+    c.Font.Size = 9.5: c.ForeColor = RGB(15, 118, 110): c.WordWrap = True
+    Set c = AddCtl(comp, "Forms.Label.1", "lblNote", 16, 452, 460, 30, "")
+    c.Font.Size = 9.5: c.ForeColor = RGB(180, 83, 9): c.WordWrap = True
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnEmail", 16, 486, 146, 34, "Send Email")
+    c.BackColor = RGB(20, 184, 166): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True: c.Font.Size = 10.5
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnWa", 170, 486, 160, 34, "Send on WhatsApp")
+    c.BackColor = RGB(37, 211, 102): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True: c.Font.Size = 10.5
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnSave", 338, 486, 138, 34, "Save as...")
+    c.Font.Size = 10.5
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnClose", 388, 12, 88, 24, "Close")
+    c.Font.Size = 9.5
     code = "Public Choice As String" & vbCrLf & _
         "Private Sub btnEmail_Click()" & vbCrLf & "    Choice = ""email"": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
         "Private Sub btnWa_Click()" & vbCrLf & "    Choice = ""wa"": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
@@ -5116,19 +5141,27 @@ Private Function BuildForms() As Boolean
     Set comp = vbp.VBComponents.Add(3)
     comp.Name = "PfyPwd"
     comp.Properties("Caption").Value = APP_NAME & " - mail password"
-    comp.Properties("Width").Value = 320
-    comp.Properties("Height").Value = 190
+    comp.Properties("Width").Value = 400
+    comp.Properties("Height").Value = 290
     comp.Properties("BackColor").Value = RGB(244, 247, 251)
-    Set c = AddCtl(comp, "Forms.Label.1", "lblP", 14, 10, 284, 30, "Mail password")
-    c.WordWrap = True: c.ForeColor = RGB(11, 31, 58)
-    Set c = AddCtl(comp, "Forms.TextBox.1", "txtPwd", 14, 46, 284, 22)
-    c.PasswordChar = "*"
-    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkShow", 14, 74, 140, 18, "Show password")
-    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkRem", 160, 74, 150, 18, "Remember this password")
-    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnOK", 118, 110, 86, 26, "Send")
-    c.BackColor = RGB(20, 184, 166): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True: c.Default = True
-    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnCancel", 212, 110, 86, 26, "Cancel")
-    c.Cancel = True
+    Set c = AddCtl(comp, "Forms.Label.1", "lblP", 16, 12, 360, 40, "Mail password")
+    c.WordWrap = True: c.ForeColor = RGB(11, 31, 58): c.Font.Size = 10.5: c.Font.Bold = True
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtPwd", 16, 58, 360, 26)
+    c.PasswordChar = "*": c.Font.Size = 12
+    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkShow", 16, 90, 150, 22, "Show password")
+    c.Font.Size = 10
+    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkRem", 176, 90, 200, 22, "Remember this password")
+    c.Font.Size = 10
+    Set c = AddCtl(comp, "Forms.Label.1", "lblHelp", 16, 118, 360, 36, _
+        "Gmail / Yahoo: use the 16-letter App password (Google Account > Security > 2-Step Verification ON > App passwords) - not your normal password.")
+    c.WordWrap = True: c.Font.Size = 9.5: c.ForeColor = RGB(15, 118, 110)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblSafe", 16, 158, 360, 36, _
+        "Your password stays on this PC only. It is never shared with anyone - it goes only to your own mail server to send this email.")
+    c.WordWrap = True: c.Font.Size = 9.5: c.ForeColor = RGB(71, 85, 105)
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnOK", 184, 204, 92, 30, "Send")
+    c.BackColor = RGB(20, 184, 166): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True: c.Font.Size = 10.5: c.Default = True
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnCancel", 284, 204, 92, 30, "Cancel")
+    c.Cancel = True: c.Font.Size = 10.5
     code = "Public Choice As String" & vbCrLf & _
         "Private Sub chkShow_Click()" & vbCrLf & "    If chkShow.Value Then txtPwd.PasswordChar = """" Else txtPwd.PasswordChar = ""*""" & vbCrLf & "End Sub" & vbCrLf & _
         "Private Sub btnOK_Click()" & vbCrLf & "    Choice = ""ok"": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
@@ -5221,23 +5254,302 @@ Private Sub ApplyLayout230()
     SetApp "B19", "2.3.0"
 End Sub
 
+
+
+'==============================================================
+'  v2.3.1: info cards, WhatsApp app / browser, dark mode on every sheet
+'==============================================================
+' Readable card on the sheet. lines: "#Heading" or text. buttons: Array(caption, macro, "teal" / "white")
+Public Sub InfoCard(ByVal title As String, ByVal subTitle As String, ByVal lines As Variant, ByVal buttons As Variant)
+    Dim ws As Object, shp As Object, card As Object, lst As Object, i As Long, txt As String, fs As Single, tries As Long
+    Dim l As Single, t As Single, w As Single, h As Single, cw As Single, cl As Single, ct As Single, y As Single, bx As Single, bw As Single
+    On Error GoTo fin
+    InfoCardHide
+    ToastHide
+    Set ws = ActiveSheet
+    CoverRect l, t, w, h
+    Set shp = NewBox(ws, "ic_ov", 1, l, t, w, h, RGB(11, 31, 58))
+    shp.Fill.Transparency = 0.4
+    shp.OnAction = "TallyLink.WhatsNewNoop"
+    ViewRect l, t, w, h
+    cw = 620
+    If cw > w - 20 Then cw = w - 20
+    If cw < 320 Then cw = 320
+    cl = l + (w - cw) / 2: ct = t + 12
+    If cl < l + 4 Then cl = l + 4
+    Set card = NewBox(ws, "ic_card", 5, cl, ct, cw, 300, RGB(255, 255, 255))
+    card.Adjustments.Item(1) = 0.03
+    card.Shadow.Visible = -1: card.Shadow.Blur = 22: card.Shadow.OffsetY = 5: card.Shadow.Transparency = 0.7
+    card.OnAction = "TallyLink.WhatsNewNoop"
+    Set shp = NewBox(ws, "ic_bar", 1, cl, ct, cw, 6, RGB(20, 184, 166))
+    Set shp = NewText(ws, "ic_title", cl + 30, ct + 24, cw - 60, 28)
+    StyleText shp, title, 16, RGB(11, 31, 58), True
+    shp.OnAction = "TallyLink.WhatsNewNoop"
+    Set shp = NewText(ws, "ic_sub", cl + 30, ct + 54, cw - 60, 20)
+    StyleText shp, subTitle, 10.5, RGB(100, 116, 139)
+    shp.OnAction = "TallyLink.WhatsNewNoop"
+    Set shp = NewBox(ws, "ic_line", 1, cl + 30, ct + 82, cw - 60, 1, RGB(226, 232, 240))
+    For i = 0 To UBound(lines)
+        If Left$(lines(i), 1) = "#" Then
+            txt = txt & IIf(i > 0, vbCr, "") & Mid$(lines(i), 2)
+        Else
+            txt = txt & IIf(i > 0, vbCr, "") & lines(i)
+        End If
+    Next i
+    fs = 11
+    Set lst = NewText(ws, "ic_body", cl + 30, ct + 94, cw - 60, 40)
+    For tries = 1 To 3
+        StyleText lst, txt, fs, RGB(30, 41, 59)
+        With lst.TextFrame2
+            .TextRange.ParagraphFormat.SpaceAfter = fs * 0.55
+            .TextRange.ParagraphFormat.LineRuleWithin = -1
+            .TextRange.ParagraphFormat.SpaceWithin = 1.12
+            For i = 0 To UBound(lines)
+                If Left$(lines(i), 1) = "#" Then
+                    With .TextRange.Paragraphs(i + 1)
+                        .Font.Bold = -1
+                        .Font.Size = fs + 1.5
+                        .Font.Fill.ForeColor.RGB = RGB(15, 118, 110)
+                        If i > 0 Then .ParagraphFormat.SpaceBefore = fs * 0.9
+                    End With
+                End If
+            Next i
+            .AutoSize = 1
+        End With
+        If lst.Top + lst.Height + 80 < t + h - 8 Or fs <= 9 Then Exit For
+        fs = fs - 1
+    Next tries
+    lst.OnAction = "TallyLink.WhatsNewNoop"
+    y = lst.Top + lst.Height + 18
+    bx = cl + cw - 30
+    For i = UBound(buttons) To 0 Step -1
+        bw = 60 + Len(buttons(i)(0)) * 7.2
+        bx = bx - bw
+        Set shp = NewBox(ws, "ic_btn" & i, 5, bx, y, bw, 36, IIf(buttons(i)(2) = "teal", RGB(20, 184, 166), RGB(255, 255, 255)))
+        shp.Adjustments.Item(1) = 0.25
+        If buttons(i)(2) <> "teal" Then shp.Line.Visible = -1: shp.Line.ForeColor.RGB = RGB(20, 184, 166): shp.Line.Weight = 1.25
+        StyleText shp, buttons(i)(0), 11, IIf(buttons(i)(2) = "teal", RGB(255, 255, 255), RGB(15, 118, 110)), True, 2
+        shp.TextFrame2.VerticalAnchor = 3
+        shp.OnAction = buttons(i)(1)
+        bx = bx - 12
+    Next i
+    card.Height = y + 36 + 26 - ct
+    Application.ScreenUpdating = True
+    Exit Sub
+fin:
+    InfoCardHide
+End Sub
+
+Public Sub InfoCardHide()
+    DeleteShapes "ic_"
+End Sub
+
 ' Shown once after the update (after What's new > Got it)
 Private Sub MailIntro()
-    Dim a As VbMsgBoxResult
+    InfoCard "New: send your Suspense entries by Email or WhatsApp", "Change Ledger > Make suspense file  -  one click, ready to send", Array( _
+        "#What it does", _
+        "Makes an Excel of all your Suspense entries with a dropdown of every ledger. The person picks the right ledgers and sends the file back.", _
+        "Send it by Email, on WhatsApp, or Save as. When it comes back: Change Ledger > Import filled suspense file.", _
+        "#Before you send by Email", _
+        "1.   Turn ON 2-Step Verification in your Google / Yahoo account.", _
+        "2.   Create an App password: open myaccount.google.com/apppasswords, type a name (e.g. Postify) and click Create.", _
+        "3.   Use those 16 letters as the mail password in Postify - not your normal Gmail password.", _
+        "Company mail: enter your mail server in Settings > Email & WhatsApp.   Outlook / Hotmail may not work - use WhatsApp.", _
+        "#Before you send on WhatsApp", _
+        "Log in to WhatsApp on this PC first - WhatsApp Web in your browser, or the WhatsApp app. You choose which one in the pop-up.", _
+        "#Your password", _
+        "It stays on this PC only and is never shared with anyone. Should Postify remember it after you type it once?"), _
+        Array(Array("Ask me every time", "TallyLink.MailIntroAsk", "white"), Array("Remember my password", "TallyLink.MailIntroRemember", "teal"))
+End Sub
+
+Public Sub MailIntroRemember()
+    MailIntroDone "Yes"
+End Sub
+
+Public Sub MailIntroAsk()
+    MailIntroDone "No"
+End Sub
+
+Private Sub MailIntroDone(ByVal remember As String)
+    InfoCardHide
+    SetSetting "MailRemember", remember
     SetApp "A17", "Mail intro shown"
-    SetApp "B17", Format$(Now, "dd-mm-yyyy")
-    a = MsgBox("New: send your Suspense entries as an Excel file" & vbCrLf & vbCrLf & _
-        "Change Ledger > Make suspense file creates an Excel of all Suspense entries with a ledger dropdown. " & _
-        "Send it by Email or WhatsApp, or Save as. When it comes back filled, Import filled suspense file puts the ledgers into Change Ledger." & vbCrLf & vbCrLf & _
-        "Email setup (one time, Settings > Email & WhatsApp):" & vbCrLf & _
-        "  - Enter your email. Gmail, Yahoo, Zoho and Rediff are set up automatically; company mail needs the mail server." & vbCrLf & _
-        "  - Gmail / Yahoo need an 'App password': your account > Security > turn on 2-Step Verification > App passwords > create one and use its 16 letters." & vbCrLf & _
-        "  - Outlook / Hotmail may not allow sending from here: WhatsApp is recommended." & vbCrLf & vbCrLf & _
-        "Should Postify remember your mail password after you type it once?" & vbCrLf & _
-        "Yes = remember it      No = ask me every time" & vbCrLf & "(You can change this later on the Settings sheet.)", vbYesNo + vbQuestion, APP_NAME & " - Suspense file")
-    SetSetting "MailRemember", IIf(a = vbYes, "Yes", "No")
-    If Not FormExists("PfySend") Then BuildForms
-    If MsgBox("Open Settings now to enter your email and the person's email / WhatsApp number?", vbYesNo + vbQuestion, APP_NAME) = vbYes Then
-        GoSheet "Settings", "B19"
+    SetApp "B17", "card"
+    If Not FormReady("PfySend") Then BuildForms
+    GoSheet "Settings", "B19"
+    Notify "Enter your email and the person's email / WhatsApp number here." & vbCrLf & _
+        "Password: " & IIf(remember = "Yes", "remembered after the first send.", "asked at every send.") & " Change it any time in row 23.", "ok"
+End Sub
+
+Private Sub ApplyLayout231()
+    Dim home As Worksheet, st As Worksheet, shp As Object, rg As Range, mv As Variant, i As Long, r1 As Long, r2 As Long
+    On Error Resume Next
+    If CStr(AppData().Range("B20").Value) = "2.3.1" Then Exit Sub
+    ' Settings: where WhatsApp opens
+    Set st = ThisWorkbook.Worksheets("Settings")
+    st.Range("A13:C13").Copy Destination:=st.Range("A28:C28")
+    st.Range("A28").Value = "WhatsApp opens in"
+    st.Range("B28").Value = "Browser"
+    st.Range("C28").Value = "Browser = WhatsApp Web (uses your browser login). App = the WhatsApp app. You can also choose in the pop-up."
+    st.Range("B28").Validation.Delete
+    st.Range("B28").Validation.Add Type:=3, AlertStyle:=1, Operator:=1, Formula1:="Browser,App"
+    ThisWorkbook.Names.Add Name:="WaOpenIn", RefersTo:="=Settings!$B$28"
+    ' Home: Updates & info buttons move up one row each (no empty row under Last updated)
+    Set home = ThisWorkbook.Worksheets("Home")
+    home.Unprotect SHEET_PW
+    If CellText(home.Range("Y33").Value) = "" And InStr(CellText(home.Range("Y34").Value), "Check for updates") > 0 Then
+        mv = Array(Array(34, 33), Array(36, 35), Array(37, 36))
+        For i = 0 To 2
+            r1 = mv(i)(0): r2 = mv(i)(1)
+            home.Range("Y" & r1 & ":AQ" & r1).Cut home.Range("Y" & r2)
+            home.Rows(r2).RowHeight = IIf(r2 = 36, 24, 26)
+            For Each shp In home.Shapes
+                If shp.TopLeftCell.Row = r1 And shp.TopLeftCell.Column >= 25 And shp.Name <> "theme_btn" Then
+                    shp.Top = home.Rows(r2).Top
+                    shp.Height = home.Rows(r2).Height
+                End If
+            Next shp
+        Next i
+        home.Rows(37).RowHeight = 14
     End If
+    home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
+    home.EnableSelection = 0
+    SetApp "A20", "Layout 2.3.1"
+    SetApp "B20", "2.3.1"
+End Sub
+
+'---------------- dark mode for every sheet ----------------
+Private Function IsDark() As Boolean
+    IsDark = (LCase$(CStr(AppData().Range("B14").Value)) = "dark")
+End Function
+
+' 1x1 dark picture used as the sheet background (fills everything that has no colour of its own)
+Private Function DarkPng() As String
+    Dim hx As String, b() As Byte, i As Long, f As Integer, p As String
+    p = Environ$("TEMP") & "\postify_dark_bg.png"
+    If Dir(p) <> "" Then DarkPng = p: Exit Function
+    hx = "89504E470D0A1A0A0000000D4948445200000001000000010802000000907753DE0000000C49444154789C63E0165200000069003E33E861380000000049454E44AE426082"
+    ReDim b(0 To Len(hx) \ 2 - 1)
+    For i = 0 To UBound(b)
+        b(i) = CByte("&H" & Mid$(hx, i * 2 + 1, 2))
+    Next i
+    f = FreeFile
+    Open p For Binary Access Write As #f
+    Put #f, , b
+    Close #f
+    DarkPng = p
+End Function
+
+Private Sub SheetBackground(ws As Worksheet, ByVal dark As Boolean)
+    On Error Resume Next
+    If dark Then
+        ws.SetBackgroundPicture DarkPng()
+    Else
+        ws.SetBackgroundPicture ""
+    End If
+End Sub
+
+' New sheets made while dark mode is on (reports) get the dark background too
+Private Sub DarkIfNeeded(ws As Worksheet)
+    If IsDark() Then SheetBackground ws, True
+End Sub
+
+Private Sub SwapPairs(rg As Range, ByVal toDark As Boolean)
+    Dim pairs As Variant, i As Long, a As Long, b As Long
+    pairs = Array( _
+        Array(RGB(244, 247, 251), RGB(11, 18, 32), True, True, False), _
+        Array(RGB(255, 255, 255), RGB(21, 32, 51), True, False, False), _
+        Array(RGB(230, 250, 246), RGB(15, 59, 58), True, False, False), _
+        Array(RGB(11, 31, 58), RGB(226, 232, 240), False, True, False), _
+        Array(RGB(30, 41, 59), RGB(203, 213, 225), False, True, False), _
+        Array(RGB(100, 116, 139), RGB(148, 163, 184), False, True, False), _
+        Array(RGB(15, 118, 110), RGB(94, 234, 212), False, True, False), _
+        Array(RGB(226, 232, 240), RGB(51, 65, 85), False, False, True))
+    For i = 0 To UBound(pairs)
+        If toDark Then a = pairs(i)(0): b = pairs(i)(1) Else a = pairs(i)(1): b = pairs(i)(0)
+        SwapColour rg, a, b, pairs(i)(2), pairs(i)(3), pairs(i)(4)
+    Next i
+End Sub
+
+' Coloured cells keep dark text so they stay readable on the dark background
+Private Sub DarkTextOnLightFills(ws As Worksheet)
+    Dim fills As Variant, c As Variant
+    On Error Resume Next
+    fills = Array(RGB(255, 255, 255), RGB(255, 248, 225), RGB(255, 242, 204), RGB(230, 250, 246), RGB(244, 247, 251), RGB(226, 232, 240), _
+        RGB(241, 245, 249), RGB(254, 243, 199), CLR_OK, CLR_INFO, CLR_ERR, CLR_TALLY, CLR_TALLYONLY, 13431551)
+    For Each c In fills
+        Application.FindFormat.Clear: Application.ReplaceFormat.Clear
+        Application.FindFormat.Interior.Color = c
+        Application.FindFormat.Font.ColorIndex = -4105
+        Application.ReplaceFormat.Font.Color = RGB(30, 41, 59)
+        ws.UsedRange.Replace What:="", Replacement:="", LookAt:=2, SearchFormat:=True, ReplaceFormat:=True
+    Next c
+    Application.FindFormat.Clear: Application.ReplaceFormat.Clear
+End Sub
+
+Private Sub GridColour(ws As Worksheet, ByVal toDark As Boolean)
+    Dim e As Variant
+    On Error Resume Next
+    For Each e In Array(7, 8, 9, 10)
+        Application.FindFormat.Clear: Application.ReplaceFormat.Clear
+        If toDark Then
+            Application.FindFormat.Borders(e).ColorIndex = -4105
+            Application.ReplaceFormat.Borders(e).Color = RGB(71, 85, 105)
+        Else
+            Application.FindFormat.Borders(e).Color = RGB(71, 85, 105)
+            Application.ReplaceFormat.Borders(e).ColorIndex = -4105
+        End If
+        ws.UsedRange.Replace What:="", Replacement:="", LookAt:=2, SearchFormat:=True, ReplaceFormat:=True
+    Next e
+    Application.FindFormat.Clear: Application.ReplaceFormat.Clear
+End Sub
+
+' Button: Dark mode / Light mode - now for the whole workbook
+Public Sub ToggleTheme()
+    Dim ws As Worksheet, toDark As Boolean, lastR As Long, n As Long, k As Long, page As Boolean
+    On Error Resume Next
+    toDark = Not IsDark()
+    ProgressShow IIf(toDark, "Switching to dark mode", "Switching to light mode"), "Restyling the sheets..."
+    Application.ScreenUpdating = False
+    n = ThisWorkbook.Worksheets.Count
+    For Each ws In ThisWorkbook.Worksheets
+        k = k + 1
+        ProgressUpdate k / n, "Restyling " & ws.Name & "..."
+        If ws.Name <> "AppData" And ws.Name <> "TallyDebug" Then
+            ws.Unprotect SHEET_PW
+            page = (ws.Name = "Home" Or ws.Name = "Help" Or ws.Name = "Update History")
+            If toDark And Not page Then DarkTextOnLightFills ws
+            If page Then
+                SwapPairs ws.Range("A1:AZ" & (ws.UsedRange.Row + ws.UsedRange.Rows.Count + 5)), toDark
+                ' rows below the used area (they only have the column colour)
+                lastR = ws.UsedRange.Row + ws.UsedRange.Rows.Count
+                If ws.Name <> "Home" Then ws.Range("A" & lastR & ":E" & lastR + 300).Interior.Color = IIf(toDark, RGB(11, 18, 32), RGB(244, 247, 251))
+            Else
+                GridColour ws, toDark
+                ' grey notes / descriptions: a lighter grey on the dark background
+                If toDark Then
+                    SwapColour ws.UsedRange, RGB(100, 116, 139), RGB(148, 163, 184), False, True, False
+                Else
+                    SwapColour ws.UsedRange, RGB(148, 163, 184), RGB(100, 116, 139), False, True, False
+                End If
+            End If
+            SheetBackground ws, toDark
+            If ws.Name = "Home" Then
+                ws.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
+                ws.EnableSelection = 0
+            End If
+        End If
+    Next ws
+    ' text without its own colour: light in dark mode, normal black in light mode
+    If toDark Then
+        ThisWorkbook.Styles("Normal").Font.Color = RGB(226, 232, 240)
+    Else
+        ThisWorkbook.Styles("Normal").Font.ColorIndex = -4105
+    End If
+    SetApp "A14", "Theme"
+    SetApp "B14", IIf(toDark, "dark", "light")
+    ThemeButton
+    Application.ScreenUpdating = True
+    ProgressDone IIf(toDark, "Dark mode on", "Light mode on")
+    LogAct "Theme", IIf(toDark, "Dark mode", "Light mode")
 End Sub
