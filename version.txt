@@ -1,3 +1,6 @@
-2.3.5
-Update in Tally now reads every Day Book correctly
+2.4.1
+Update in Tally changes the right voucher type - no blocking when another type uses the same number
+Every change is checked again in Tally
+New: Find differences - a small bank reconciliation on Bank Balances
+Statements with a BAL column now give their balance
 Minor bug fixes

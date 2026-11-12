@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.3.5"
+Public Const APP_VERSION As String = "2.4.1"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -63,7 +63,9 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Update in Tally now reads every Day Book correctly (fixes 'Day Book reply could not be read')|Minor bug fixes"
+Private Const WHATS_NEW As String = "Update in Tally changes the right voucher type: a Payment No. 107 is changed even when a Receipt No. 107 exists|" & _
+    "Every change is checked again in Tally - other vouchers with the same number are watched and updating stops at once if one is touched|" & _
+    "New: Find differences - a small bank reconciliation on Bank Balances|Statements with a 'BAL' column now give their balance|Minor bug fixes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -1762,7 +1764,7 @@ Private Function ParseStatement(ByVal arr As Variant, ByRef info As String) As C
                     ElseIf cDate_ = 0 Then
                         cDate_ = j
                     End If
-                ElseIf HdrMatch(h, "balance") Then
+                ElseIf HdrMatch(h, "balance") Or Trim$(h) = "bal" Or Left$(Trim$(h), 4) = "bal " Or Right$(Trim$(h), 4) = " bal" Or InStr(h, "bal amt") > 0 Then
                     If cBal = 0 And InStr(h, "opening") = 0 Then cBal = j
                 ElseIf HdrMatch(h, "withdraw|debit|paid out|money out") Or h = "dr" Or Left$(h, 3) = "dr " Or Left$(h, 3) = "dr(" Then
                     If cWd = 0 Then cWd = j
@@ -2011,7 +2013,7 @@ Public Sub ImportBankStatement()
             If rec(6) Then cBalv = rec(5): haveBal = True: Exit For
         Next k
     End If
-    bmsg = BankStmtBalance(CStr(bank), dMax, cBalv, haveBal, Mid$(CStr(f), InStrRev(CStr(f), "\") + 1))
+    bmsg = BankStmtBalance(CStr(bank), dMax, cBalv, haveBal, Mid$(CStr(f), InStrRev(CStr(f), "\") + 1), dMin)
     Application.ScreenUpdating = True
     ProgressDone "Import finished"
     QuietActivate ws
@@ -2917,7 +2919,8 @@ End Sub
 Public Sub UpdateLedgerInTally()
     Dim ws As Worksheet, lastR As Long, r As Long, nTodo As Long, newL As String, oldL As String, guid As String
     Dim d As Date, doc As Object, errTxt As String, vn As Object, ln As Object, lines As Object, hit As Object, hitLine As Object
-    Dim nHit2 As Long, hit2 As Object, hitLine2 As Object
+    Dim nHit2 As Long, hit2 As Object, hitLine2 As Object, dupInfo As String, nSame As Long, nDayBefore As Long, doc2 As Object, v2 As Object, chk As String
+    Dim snapB As Collection, snapOk As Boolean, sv2 As Variant
     Dim nHit As Long, nd As Object, body As String, resp As String, created As Long, altered As Long
     Dim lineErr As String, nOk As Long, nErr As Long, co As String, sv As String, g As String, amount As Double
     Dim cacheDay As Date, haveCache As Boolean, st As String, agst As Boolean, nVch As Long, vno As String
@@ -3031,6 +3034,28 @@ Public Sub UpdateLedgerInTally()
                     SetFxStatus ws, r, "Voucher has no number - change it in Tally", CLR_TALLYONLY: nErr = nErr + 1
                     GoTo nextRow
                 End If
+                ' Tally finds the voucher by type + number + date. Only a voucher of the SAME type with the same number
+                ' on the same date is truly ambiguous. Vouchers of other types with this number are watched (snapshot).
+                dupInfo = ""
+                Set snapB = NumberVouchers(vno, d, snapOk)
+                If Not snapOk Then
+                    SetFxStatus ws, r, "Could not read voucher No. " & vno & " from Tally to protect other vouchers - not changed. Try again.", CLR_ERR: nErr = nErr + 1
+                    GoTo nextRow
+                End If
+                nSame = 0
+                For Each sv2 In snapB
+                    If StrComp(sv2(0), CellText(ws.Cells(r, S_GUID).Value), vbTextCompare) <> 0 And StrComp(sv2(0), NodeText(vn, "GUID"), vbTextCompare) <> 0 Then
+                        If StrComp(sv2(1), NodeText(vn, "VOUCHERTYPENAME"), vbTextCompare) = 0 And sv2(2) = TallyDateStr(d) Then
+                            nSame = nSame + 1: dupInfo = sv2(1) & " No. " & vno
+                        End If
+                    End If
+                Next sv2
+                If nSame > 0 Then
+                    ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Interior.Color = CLR_TALLYONLY: ws.Range(ws.Cells(r, 1), ws.Cells(r, S_STATUS)).Font.Color = RGB(30, 41, 59)
+                    SetFxStatus ws, r, "Not changed: there are two " & dupInfo & " on " & Format$(d, "dd-mm-yyyy") & " - Tally cannot tell them apart. Change this one in Tally.", CLR_TALLYONLY: nErr = nErr + 1
+                    GoTo nextRow
+                End If
+                nDayBefore = doc.SelectNodes("//VOUCHER").Length
                 On Error Resume Next
                 vn.removeAttribute "REMOTEID"
                 vn.removeAttribute "VCHKEY"
@@ -3058,6 +3083,18 @@ Public Sub UpdateLedgerInTally()
                         "Updating was stopped so this cannot repeat. Please delete the extra voucher in Day Book " & Format$(d, "dd-mm-yyyy") & ".", vbCritical
                     Exit Sub
                 ElseIf altered > 0 And lineErr = "" Then
+                    ' read the day again and confirm: same number of vouchers, this voucher has the new ledger and not the old one
+                    chk = VerifyAlter(d, CellText(ws.Cells(r, S_GUID).Value), vno, oldL, newL, nDayBefore)
+                    If chk = "" Then chk = VerifyOthers(vno, d, snapB, CellText(ws.Cells(r, S_GUID).Value), NodeText(vn, "GUID"))
+                    If chk <> "" Then
+                        SetFxStatus ws, r, "CHECK IN TALLY: " & chk, CLR_ERR: nErr = nErr + 1
+                        Application.StatusBar = False
+                        ProgressHide
+                        LogAct "Update in Tally STOPPED", "Row " & r & ": " & chk
+                        MsgBox "Postify could not confirm the change in Tally (row " & r & "):" & vbCrLf & vbCrLf & chk & vbCrLf & vbCrLf & _
+                            "Updating was stopped so nothing else is changed. Please check Day Book " & Format$(d, "dd-mm-yyyy") & " in Tally.", vbCritical, APP_NAME
+                        Exit Sub
+                    End If
                     SetFxStatus ws, r, "Updated in Tally " & Format$(Now, "dd-mmm-yy hh:nn") & " (was '" & oldL & "')", CLR_OK: nOk = nOk + 1
                     ws.Cells(r, S_CUR).Value = newL
                     If IsBankOrCashGroup(LedgerGroupFull(CellText(ws.Cells(r, S_OTHER).Value))) Then LearnFromRow CellText(ws.Cells(r, S_NARR).Value), newL, CellText(ws.Cells(r, S_OTHER).Value), CDbl(d)
@@ -3278,6 +3315,7 @@ Private Sub StartupWithSplash()
                     ApplyLayout230
                     ApplyLayout231
                     ApplyLayout233
+                    ApplyLayout240
                     ProtectFormulaSheets
             Case 2: RefreshTallyStatus
             Case 3: EnsureHelpUpdateGuide
@@ -3309,6 +3347,7 @@ plain:
     ApplyLayout230
     ApplyLayout231
     ApplyLayout233
+    ApplyLayout240
     ProtectFormulaSheets
     RefreshTallyStatus
     EnsureHelpUpdateGuide
@@ -4070,7 +4109,7 @@ Private Sub BBCheckRow(ws As Worksheet, ByVal r As Long)
 End Sub
 
 ' Called after an import: remember the statement balance (latest statement wins) and compare. Returns a short message.
-Private Function BankStmtBalance(ByVal bank As String, ByVal dTo As Date, ByVal bal As Double, ByVal hasBal As Boolean, ByVal fileName As String) As String
+Private Function BankStmtBalance(ByVal bank As String, ByVal dTo As Date, ByVal bal As Double, ByVal hasBal As Boolean, ByVal fileName As String, Optional ByVal dFrom As Date = 0) As String
     Dim ws As Worksheet, r As Long, old As Variant
     On Error GoTo fin
     Set ws = BankSheet()
@@ -4082,6 +4121,7 @@ Private Function BankStmtBalance(ByVal bank As String, ByVal dTo As Date, ByVal 
     ws.Cells(r, 2).Value = dTo
     If hasBal Then ws.Cells(r, 3).Value = bal Else ws.Cells(r, 3).Value = "not in statement"
     ws.Cells(r, 8).Value = fileName
+    If dFrom > 0 Then ws.Cells(r, 9).Value = dFrom
 check:
     BBCheckRow ws, r
     RefreshBankSummary
@@ -4089,7 +4129,7 @@ check:
         BankStmtBalance = "Bank balance on " & Format$(ws.Cells(r, 2).Value, "dd-mm-yyyy") & ": Tally matches the statement *"
     ElseIf IsNumeric(ws.Cells(r, 5).Value) And CellText(ws.Cells(r, 5).Value) <> "" Then
         BankStmtBalance = "Bank balance on " & Format$(ws.Cells(r, 2).Value, "dd-mm-yyyy") & ": Tally differs from the statement by " & _
-            Format$(ws.Cells(r, 5).Value, "#,##0.00") & " * (see Bank Balances)"
+            Format$(ws.Cells(r, 5).Value, "#,##0.00") & " * - Bank Balances > Find differences shows which entries"
     End If
 fin:
 End Function
@@ -4327,7 +4367,11 @@ End Sub
 ' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
 Private Function HistoryText() As String
     Dim s As String
-    s = "2.3.5|15-Nov-2026|Day Book replies with special characters or Tally custom fields are read correctly|Minor bug fixes"
+    s = "2.4.1|16-Nov-2026|Update in Tally works by voucher type + number + date (no blocking when another type uses the same number)|" & _
+        "Other vouchers with the same number are watched during every change|Minor bug fixes"
+    s = s & "##2.4.0|16-Nov-2026|Safer Update in Tally: voucher number must be unique, every change is verified in Tally|" & _
+        "Find differences: mini bank reconciliation on Bank Balances|Balance column named BAL is recognised|Minor bug fixes"
+    s = s & "##2.3.5|15-Nov-2026|Day Book replies with special characters or Tally custom fields are read correctly|Minor bug fixes"
     s = s & "##2.3.4|14-Nov-2026|Update in Tally finds the voucher reliably (voucher number + amount + type)|Minor bug fixes"
     s = s & "##2.3.3|14-Nov-2026|Dark mode removed to keep the file fast|Minor bug fixes"
     s = s & "##2.3.2|13-Nov-2026|Make suspense file fixed - faster and more reliable|Smoother screen after long actions|Minor bug fixes"
@@ -5654,4 +5698,329 @@ Private Sub ApplyTheme(ByVal toDark As Boolean)
     Application.ScreenUpdating = True
     ProgressDone IIf(toDark, "Dark mode on", "Light mode on")
     LogAct "Theme", IIf(toDark, "Dark mode", "Light mode")
+End Sub
+
+'==============================================================
+'  v2.4.0: safe ledger change + bank reconciliation (Find differences)
+'==============================================================
+' All vouchers in Tally with this number (any type, this and the previous financial year):
+' each item = Array(guid, type, yyyymmdd, fingerprint of ledgers + amounts)
+Private Function NumberVouchers(ByVal vno As String, ByVal d As Date, ByRef ok As Boolean) As Collection
+    Dim req As String, resp As String, co As String, sv As String, doc As Object, vn As Object, ln As Object, res As New Collection
+    Dim g As String, typ As String, fp As String
+    ok = False
+    Set NumberVouchers = res
+    On Error GoTo fin
+    co = SettingValue("CompanyName")
+    sv = "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+    If co <> "" Then sv = sv & "<SVCURRENTCOMPANY>" & XmlEsc(co) & "</SVCURRENTCOMPANY>"
+    sv = sv & "<SVFROMDATE>" & TallyDateStr(DateAdd("yyyy", -1, FyStartOf(d))) & "</SVFROMDATE><SVTODATE>" & TallyDateStr(DateAdd("d", -1, DateAdd("yyyy", 1, FyStartOf(d)))) & "</SVTODATE>"
+    req = "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>XLVchNo</ID></HEADER>" & _
+          "<BODY><DESC><STATICVARIABLES>" & sv & "</STATICVARIABLES><TDL><TDLMESSAGE>" & _
+          "<COLLECTION NAME=""XLVchNo"" ISMODIFY=""No""><TYPE>Voucher</TYPE><FETCH>Date,VoucherTypeName,VoucherNumber,Guid," & _
+          "AllLedgerEntries.LedgerName,AllLedgerEntries.Amount,LedgerEntries.LedgerName,LedgerEntries.Amount</FETCH><FILTER>XLVchNoF</FILTER></COLLECTION>" & _
+          "<SYSTEM TYPE=""Formulae"" NAME=""XLVchNoF"">$VoucherNumber = """ & XmlEsc(vno) & """</SYSTEM>" & _
+          "</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
+    If Not PostXml(req, resp) Then Exit Function
+    resp = CleanTallyXml(resp)
+    Set doc = CreateObject("MSXML2.DOMDocument.6.0")
+    doc.async = False
+    If Not doc.LoadXML(resp) Then Exit Function
+    For Each vn In doc.SelectNodes("//VOUCHER")
+        If NormNo(NodeText(vn, "VOUCHERNUMBER")) = NormNo(vno) Then
+            g = NodeText(vn, "GUID")
+            If g = "" Then g = CStr(vn.getAttribute("REMOTEID") & "")
+            typ = NodeText(vn, "VOUCHERTYPENAME")
+            If typ = "" Then typ = CStr(vn.getAttribute("VCHTYPE") & "")
+            fp = ""
+            For Each ln In vn.SelectNodes("ALLLEDGERENTRIES.LIST")
+                fp = fp & UCase$(NodeText(ln, "LEDGERNAME")) & "=" & Format$(Val(Replace(NodeText(ln, "AMOUNT"), ",", "")), "0.00") & ";"
+            Next ln
+            If fp = "" Then
+                For Each ln In vn.SelectNodes("LEDGERENTRIES.LIST")
+                    fp = fp & UCase$(NodeText(ln, "LEDGERNAME")) & "=" & Format$(Val(Replace(NodeText(ln, "AMOUNT"), ",", "")), "0.00") & ";"
+                Next ln
+            End If
+            res.Add Array(g, typ, NodeText(vn, "DATE"), fp)
+        End If
+    Next vn
+    ok = True
+fin:
+End Function
+
+' After an alter: the other vouchers with the same number must be exactly as before. "" = fine.
+Private Function VerifyOthers(ByVal vno As String, ByVal d As Date, ByVal before As Collection, ByVal guid1 As String, ByVal guid2 As String) As String
+    Dim after As Collection, ok As Boolean, b As Variant, a As Variant, found As Boolean
+    Set after = NumberVouchers(vno, d, ok)
+    If Not ok Then VerifyOthers = "could not re-read voucher No. " & vno & " to confirm the other vouchers are untouched": Exit Function
+    If after.Count <> before.Count Then
+        VerifyOthers = "the number of vouchers numbered " & vno & " changed from " & before.Count & " to " & after.Count: Exit Function
+    End If
+    For Each b In before
+        If StrComp(b(0), guid1, vbTextCompare) <> 0 And StrComp(b(0), guid2, vbTextCompare) <> 0 Then
+            found = False
+            For Each a In after
+                If StrComp(a(0), b(0), vbTextCompare) = 0 Then
+                    found = True
+                    If a(3) <> b(3) Or StrComp(a(1), b(1), vbTextCompare) <> 0 Then
+                        VerifyOthers = b(1) & " No. " & vno & " dt " & Right$(b(2), 2) & "-" & Mid$(b(2), 5, 2) & "-" & Left$(b(2), 4) & " was changed too - please check it in Tally"
+                        Exit Function
+                    End If
+                End If
+            Next a
+            If Not found Then VerifyOthers = b(1) & " No. " & vno & " is missing after the change - please check it in Tally": Exit Function
+        End If
+    Next b
+End Function
+
+' After an alter: re-read the day. "" = all good, else what is wrong.
+Private Function VerifyAlter(ByVal d As Date, ByVal guid As String, ByVal vno As String, ByVal oldL As String, ByVal newL As String, ByVal nBefore As Long) As String
+    Dim doc As Object, errTxt As String, vn As Object, g As String, ln As Object, hasNew As Boolean, hasOld As Boolean, found As Boolean, nAfter As Long
+    Set doc = DayBookDoc(d, errTxt)
+    If doc Is Nothing Then VerifyAlter = "could not re-read the Day Book to confirm (" & errTxt & ")": Exit Function
+    nAfter = doc.SelectNodes("//VOUCHER").Length
+    For Each vn In doc.SelectNodes("//VOUCHER")
+        g = NodeText(vn, "GUID")
+        If g = "" Then g = CStr(vn.getAttribute("REMOTEID") & "")
+        If (guid <> "" And StrComp(g, guid, vbTextCompare) = 0) Or (guid = "" And NormNo(NodeText(vn, "VOUCHERNUMBER")) = NormNo(vno)) Then
+            found = True
+            For Each ln In vn.SelectNodes(".//ALLLEDGERENTRIES.LIST|.//LEDGERENTRIES.LIST")
+                If StrComp(NodeText(ln, "LEDGERNAME"), newL, vbTextCompare) = 0 Then hasNew = True
+                If StrComp(NodeText(ln, "LEDGERNAME"), oldL, vbTextCompare) = 0 Then hasOld = True
+            Next ln
+            Exit For
+        End If
+    Next vn
+    If nAfter <> nBefore Then
+        VerifyAlter = "the number of vouchers on " & Format$(d, "dd-mm-yyyy") & " changed from " & nBefore & " to " & nAfter
+    ElseIf Not found Then
+        VerifyAlter = "voucher No. " & vno & " is no longer in the Day Book of " & Format$(d, "dd-mm-yyyy")
+    ElseIf Not hasNew Or hasOld Then
+        VerifyAlter = "voucher No. " & vno & " does not show '" & newL & "' in place of '" & oldL & "'"
+    End If
+End Function
+
+' Statement period start (column I of Bank Balances, added in 2.4.0)
+Private Function BBFrom(ws As Worksheet, ByVal r As Long, ByVal bank As String) As Variant
+    Dim v As Variant, es As Worksheet, i As Long, b As String
+    v = ParseDateCell(ws.Cells(r, 9).Value)
+    If Not IsEmpty(v) Then BBFrom = v: Exit Function
+    Set es = EntriesSheet()
+    For i = FIRST_ROW To LastDataRow(es)
+        b = CellText(es.Cells(i, COL_BANK).Value)
+        If b = "" Then b = SettingValue("DefaultBank")
+        If StrComp(b, bank, vbTextCompare) = 0 And HasRowDate(es, i) Then
+            If IsEmpty(v) Then
+                v = RowDate(es, i)
+            ElseIf RowDate(es, i) < v Then
+                v = RowDate(es, i)
+            End If
+        End If
+    Next i
+    BBFrom = v
+End Function
+
+'================ BUTTON (Bank Balances): Find differences ================
+' Mini bank reconciliation: statement rows (Entries) vs Tally vouchers of the bank for the statement period.
+Public Sub FindBankDifferences()
+    Dim bws As Worksheet, r As Long, bank As String, dFrom As Variant, dTo As Variant, vc As Collection, info As String
+    Dim es As Worksheet, i As Long, k As Long, b As String, nS As Long, sD() As Date, sIn() As Boolean, sAmt() As Double, sNarr() As String, sRow() As Long, sOk() As Boolean
+    Dim used() As Boolean, v As Variant, best As Long, bestGap As Long, gap As Long, rp As Worksheet, rr As Long, sumA As Double, sumB As Double
+    Dim stB As Variant, tB As Variant, diffV As Variant, lastR As Long, choice As Variant, lst As String, win As Long
+    Set bws = BankSheet()
+    lastR = bws.Cells(bws.Rows.Count, 1).End(xlUp).Row
+    If lastR < BB_FIRST Then Notify "Import a statement first - its bank then appears on Bank Balances.", "warn": Exit Sub
+    ' which bank: the selected row, else ask
+    r = 0
+    If ActiveSheet Is bws Then
+        If ActiveCell.Row >= BB_FIRST And ActiveCell.Row <= lastR Then r = ActiveCell.Row
+    End If
+    If r = 0 Then
+        For i = BB_FIRST To lastR
+            lst = lst & vbCrLf & (i - BB_FIRST + 1) & " = " & CellText(bws.Cells(i, 1).Value) & "   (" & CellText(bws.Cells(i, 6).Value) & ")"
+        Next i
+        If lastR = BB_FIRST Then
+            r = BB_FIRST
+        Else
+            choice = Application.InputBox("Find differences for which bank?" & lst, APP_NAME, 1, Type:=1)
+            If VarType(choice) = vbBoolean Then Exit Sub
+            r = BB_FIRST + CLng(choice) - 1
+            If r < BB_FIRST Or r > lastR Then Exit Sub
+        End If
+    End If
+    bank = CellText(bws.Cells(r, 1).Value)
+    dTo = ParseDateCell(bws.Cells(r, 2).Value)
+    dFrom = BBFrom(bws, r, bank)
+    If IsEmpty(dTo) Or IsEmpty(dFrom) Then MsgBox "No statement period found for '" & bank & "'. Import the statement first.", vbExclamation, APP_NAME: Exit Sub
+    win = DupDays(): If win < 3 Then win = 3
+    ProgressShow "Finding differences", "Reading '" & bank & "' from Tally..."
+    BBCheckRow bws, r
+    Set vc = FetchBankVouchers(bank, CDate(dFrom), CDate(dTo), True, info)
+    If vc Is Nothing Then ProgressHide: ConnectionHelp info: Exit Sub
+    ProgressUpdate 0.6, "Comparing with the statement..."
+    ' statement lines of this bank in the period
+    Set es = EntriesSheet()
+    For i = FIRST_ROW To LastDataRow(es)
+        b = CellText(es.Cells(i, COL_BANK).Value)
+        If b = "" Then b = SettingValue("DefaultBank")
+        If StrComp(b, bank, vbTextCompare) = 0 And HasRowDate(es, i) Then
+            If RowDate(es, i) >= CDate(dFrom) And RowDate(es, i) <= CDate(dTo) Then
+                nS = nS + 1
+                ReDim Preserve sD(1 To nS): ReDim Preserve sIn(1 To nS): ReDim Preserve sAmt(1 To nS)
+                ReDim Preserve sNarr(1 To nS): ReDim Preserve sRow(1 To nS): ReDim Preserve sOk(1 To nS)
+                sD(nS) = RowDate(es, i)
+                sIn(nS) = (Amt(es.Cells(i, COL_IN).Value) > 0)
+                sAmt(nS) = Amt(es.Cells(i, COL_IN).Value) + Amt(es.Cells(i, COL_OUT).Value)
+                sNarr(nS) = CellText(es.Cells(i, COL_NARR).Value)
+                sRow(nS) = i
+            End If
+        End If
+    Next i
+    ' pair each statement line with the closest unused Tally voucher (same direction + amount)
+    If vc.Count > 0 Then ReDim used(1 To vc.Count)
+    For i = 1 To nS
+        best = 0: bestGap = 9999
+        For k = 1 To vc.Count
+            If Not used(k) Then
+                v = vc(k)
+                If v(1) = sIn(i) And Abs(v(2) - sAmt(i)) < 0.005 Then
+                    gap = Abs(DateDiff("d", v(0), sD(i)))
+                    If gap <= win And gap < bestGap Then best = k: bestGap = gap
+                End If
+            End If
+        Next k
+        If best > 0 Then used(best) = True: sOk(i) = True
+    Next i
+    ' report
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    On Error Resume Next
+    ThisWorkbook.Worksheets("Bank Reco").Delete
+    On Error GoTo 0
+    Application.DisplayAlerts = True
+    gNoAnim = True
+    Set rp = ThisWorkbook.Worksheets.Add(After:=bws)
+    gNoAnim = False
+    rp.Name = "Bank Reco"
+    DarkIfNeeded rp
+    rp.Cells.Font.Name = "Segoe UI": rp.Cells.Font.Size = 10
+    rp.Range("A1:G1").Interior.Color = RGB(11, 31, 58)
+    rp.Range("A1").Value = "  Bank Reco - " & bank
+    rp.Range("A1").Font.Bold = True: rp.Range("A1").Font.Size = 14: rp.Range("A1").Font.Color = RGB(255, 255, 255)
+    rp.Rows(1).RowHeight = 30: rp.Range("A1").VerticalAlignment = -4108
+    stB = bws.Cells(r, 3).Value: tB = bws.Cells(r, 4).Value: diffV = bws.Cells(r, 5).Value
+    rp.Range("A3").Value = "Statement period": rp.Range("C3").Value = Format$(dFrom, "dd-mm-yyyy") & " to " & Format$(dTo, "dd-mm-yyyy")
+    rp.Range("A4").Value = "Balance as per statement *": rp.Range("C4").Value = stB
+    rp.Range("A5").Value = "Balance as per Tally": rp.Range("C5").Value = tB
+    rp.Range("A6").Value = "Difference": rp.Range("C6").Value = diffV
+    rp.Range("A3:A6").Font.Bold = True
+    SetRupee rp.Range("C4:C6")
+    GridBorders rp.Range("A3:C6")
+    rr = 8
+    rp.Cells(rr, 1).Value = "A.  In the bank statement but NOT in Tally (post these)"
+    rp.Cells(rr, 1).Font.Bold = True: rp.Cells(rr, 1).Font.Color = RGB(220, 38, 38)
+    rr = rr + 1
+    rp.Range(rp.Cells(rr, 1), rp.Cells(rr, 7)).Value = Array("Date", "In / Out", "Amount", "Narration", "Entries row", "", "")
+    HdrStyle rp.Range(rp.Cells(rr, 1), rp.Cells(rr, 5))
+    k = rr
+    For i = 1 To nS
+        If Not sOk(i) Then
+            rr = rr + 1
+            rp.Cells(rr, 1).Value = sD(i): rp.Cells(rr, 1).NumberFormat = "dd-mm-yyyy"
+            rp.Cells(rr, 2).Value = IIf(sIn(i), "In", "Out")
+            rp.Cells(rr, 3).Value = sAmt(i)
+            rp.Cells(rr, 4).Value = sNarr(i)
+            rp.Cells(rr, 5).Value = sRow(i)
+            sumA = sumA + IIf(sIn(i), sAmt(i), -sAmt(i))
+        End If
+    Next i
+    If rr = k Then rr = rr + 1: rp.Cells(rr, 1).Value = "None"
+    SetRupee rp.Range(rp.Cells(k + 1, 3), rp.Cells(rr, 3))
+    GridBorders rp.Range(rp.Cells(k, 1), rp.Cells(rr, 5))
+    rr = rr + 2
+    rp.Cells(rr, 1).Value = "B.  In Tally but NOT in the bank statement (check / delete these)"
+    rp.Cells(rr, 1).Font.Bold = True: rp.Cells(rr, 1).Font.Color = RGB(180, 83, 9)
+    rr = rr + 1
+    rp.Range(rp.Cells(rr, 1), rp.Cells(rr, 7)).Value = Array("Date", "In / Out", "Amount", "Narration", "Voucher", "Other ledger", "")
+    HdrStyle rp.Range(rp.Cells(rr, 1), rp.Cells(rr, 6))
+    k = rr
+    For i = 1 To vc.Count
+        If Not used(i) Then
+            v = vc(i)
+            rr = rr + 1
+            rp.Cells(rr, 1).Value = v(0): rp.Cells(rr, 1).NumberFormat = "dd-mm-yyyy"
+            rp.Cells(rr, 2).Value = IIf(v(1), "In", "Out")
+            rp.Cells(rr, 3).Value = v(2)
+            rp.Cells(rr, 4).Value = v(6)
+            rp.Cells(rr, 5).Value = v(3) & " No. " & v(4)
+            rp.Cells(rr, 6).Value = v(5)
+            sumB = sumB + IIf(v(1), v(2), -v(2))
+        End If
+    Next i
+    If rr = k Then rr = rr + 1: rp.Cells(rr, 1).Value = "None"
+    SetRupee rp.Range(rp.Cells(k + 1, 3), rp.Cells(rr, 3))
+    GridBorders rp.Range(rp.Cells(k, 1), rp.Cells(rr, 6))
+    rr = rr + 2
+    rp.Cells(rr, 1).Value = "Explained by A - B": rp.Cells(rr, 3).Value = Round(sumA - sumB, 2)
+    rp.Cells(rr + 1, 1).Value = "Not explained (opening balance / entries before " & Format$(dFrom, "dd-mm-yyyy") & ")"
+    If IsNumeric(diffV) And CellText(diffV) <> "" Then rp.Cells(rr + 1, 3).Value = Round(CDbl(diffV) - (sumA - sumB), 2)
+    rp.Range(rp.Cells(rr, 1), rp.Cells(rr + 1, 1)).Font.Bold = True
+    SetRupee rp.Range(rp.Cells(rr, 3), rp.Cells(rr + 1, 3))
+    GridBorders rp.Range(rp.Cells(rr, 1), rp.Cells(rr + 1, 3))
+    rp.Cells(rr + 3, 1).Value = "* based on the bank statement provided by you and your Tally data. Statement lines are the rows of this bank on the Entries sheet for the period."
+    rp.Cells(rr + 3, 1).Font.Italic = True: rp.Cells(rr + 3, 1).Font.Size = 8: rp.Cells(rr + 3, 1).Font.Color = RGB(100, 116, 139)
+    rp.Columns("A").ColumnWidth = 14: rp.Columns("B").ColumnWidth = 9: rp.Columns("C").ColumnWidth = 16
+    rp.Columns("D").ColumnWidth = 70: rp.Columns("E").ColumnWidth = 18: rp.Columns("F").ColumnWidth = 30
+    rp.Columns("D").WrapText = True
+    Application.ScreenUpdating = True
+    ProgressDone "Done"
+    QuietActivate rp
+    rp.Range("A1").Select
+    ActiveWindow.DisplayGridlines = False
+    LogAct "Find differences", bank & ": " & CountA(sOk, nS) & " not in Tally, " & CountUnused(used, vc.Count) & " not in statement", 0
+    Notify "Bank Reco for " & bank & ":" & vbCrLf & CountA(sOk, nS) & " statement entr(ies) missing in Tally, " & CountUnused(used, vc.Count) & _
+        " Tally entr(ies) not in the statement." & vbCrLf & "* based on the statement provided by you", IIf(CountA(sOk, nS) + CountUnused(used, vc.Count) > 0, "warn", "ok")
+End Sub
+
+Private Function CountA(okArr() As Boolean, ByVal n As Long) As Long
+    Dim i As Long
+    For i = 1 To n
+        If Not okArr(i) Then CountA = CountA + 1
+    Next i
+End Function
+
+Private Function CountUnused(u() As Boolean, ByVal n As Long) As Long
+    Dim i As Long
+    For i = 1 To n
+        If Not u(i) Then CountUnused = CountUnused + 1
+    Next i
+End Function
+
+Private Sub HdrStyle(rg As Range)
+    rg.Font.Bold = True: rg.Font.Color = RGB(255, 255, 255): rg.Interior.Color = RGB(19, 52, 94)
+End Sub
+
+' One-time (2.4.0): Bank Balances gets "Statement from" and a Find differences button
+Private Sub ApplyLayout240()
+    Dim ws As Worksheet, shp As Object
+    On Error Resume Next
+    If CStr(AppData().Range("B22").Value) = "2.4.0" Then Exit Sub
+    Set ws = BankSheet()
+    With ws.Cells(5, 9)
+        .Value = "Statement from"
+        .Font.Bold = True: .Font.Color = RGB(255, 255, 255): .Interior.Color = RGB(19, 52, 94)
+        .HorizontalAlignment = -4108: .VerticalAlignment = -4108: .WrapText = True
+    End With
+    ws.Columns(9).ColumnWidth = 15
+    ws.Range("I6:I500").NumberFormat = "dd-mm-yyyy"
+    GridBorders ws.Range("A5:I" & LastUsedRow(ws, 1, BB_FIRST))
+    For Each shp In ws.Shapes
+        If shp.Name = "bb_reco" Then shp.Delete
+    Next shp
+    Set shp = NewBox(ws, "bb_reco", 5, ws.Range("A2").Left + 324, ws.Range("A2").Top + 4, 190, 22, RGB(11, 31, 58))
+    StyleText shp, ChrW(&H2696) & "  Find differences", 10, RGB(255, 255, 255), True, 2
+    shp.TextFrame2.VerticalAnchor = 3: shp.OnAction = "TallyLink.FindBankDifferences": shp.Placement = 2
+    ws.Range("A4").Value = "Positive = money in the account, minus = overdrawn. Select a bank row and click Find differences to list the entries that make Tally and the statement differ."
+    SetApp "A22", "Layout 2.4.0"
+    SetApp "B22", "2.4.0"
 End Sub
