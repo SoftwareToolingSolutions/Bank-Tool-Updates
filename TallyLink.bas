@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.3.3"
+Public Const APP_VERSION As String = "2.3.4"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -54,6 +54,7 @@ Private Const CLR_TALLYONLY As Long = 11389944   ' orange: change this one in Ta
 Private gLastDayBook As String
 Private gNoAnim As Boolean
 Private gLastErr As String
+Private gFindWhy As String
 
 ' Learned memory (fast in-memory copy of the Learned sheet)
 Private Const LH_SIZE As Long = 65536
@@ -62,7 +63,7 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Dark mode removed - the file stays fast and light|Minor bug fixes"
+Private Const WHATS_NEW As String = "Update in Tally finds the voucher much more reliably (no more 'Voucher not found' for normal entries)|Minor bug fixes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -2802,32 +2803,68 @@ Private Function NodeText(ByVal n As Object, ByVal tag As String) As String
 End Function
 
 ' Finds the voucher: by its Tally id (GUID), else by voucher number + type + date + amount of this ledger line
+' Voucher number as written by Tally / the sheet: trimmed, case-insensitive, "0284" = "284"
+Private Function NormNo(ByVal v As String) As String
+    v = UCase$(Trim$(v))
+    If v <> "" And IsDigitStr(v) Then
+        Do While Len(v) > 1 And Left$(v, 1) = "0": v = Mid$(v, 2): Loop
+    End If
+    NormNo = v
+End Function
+
+' Find the row's voucher in the day's Day Book: GUID first, then the best match on
+' voucher number + type + amount (+ date, + ledger). gFindWhy explains a miss.
 Private Function FindVoucherForRow(ByVal doc As Object, ByVal guid As String, ByVal vno As String, ByVal vtype As String, _
         ByVal d As Date, ByVal ledger As String, ByVal amount As Double) As Object
-    Dim vn As Object, g As String, dv As Variant, ln As Object, a As Double, ok As Boolean
+    Dim vn As Object, g As String, dv As Variant, ln As Object, a As Double, sc As Long, best As Object, bestSc As Long, nBest As Long
+    Dim num As String, typ As String, amtOk As Boolean, ledOk As Boolean, numOk As Boolean, info As String
+    gFindWhy = ""
     For Each vn In doc.SelectNodes("//VOUCHER")
         g = NodeText(vn, "GUID")
         If g = "" Then g = CStr(vn.getAttribute("REMOTEID") & "")
-        If guid <> "" And StrComp(g, guid, vbTextCompare) = 0 Then Set FindVoucherForRow = vn: Exit Function
+        If guid <> "" And g <> "" Then
+            If StrComp(g, guid, vbTextCompare) = 0 Then Set FindVoucherForRow = vn: Exit Function
+        End If
     Next vn
-    If vno = "" Then Exit Function
     For Each vn In doc.SelectNodes("//VOUCHER")
-        If NodeText(vn, "VOUCHERNUMBER") = vno And StrComp(NodeText(vn, "VOUCHERTYPENAME"), vtype, vbTextCompare) = 0 Then
-            dv = ParseTallyDate(NodeText(vn, "DATE"))
-            If Not IsEmpty(dv) Then
-                If dv = d Then
-                    ok = False
-                    For Each ln In vn.SelectNodes("ALLLEDGERENTRIES.LIST|LEDGERENTRIES.LIST")
-                        If StrComp(NodeText(ln, "LEDGERNAME"), ledger, vbTextCompare) = 0 Then
-                            a = Abs(Val(Replace(NodeText(ln, "AMOUNT"), ",", "")))
-                            If Abs(a - amount) < 0.005 Then ok = True
-                        End If
-                    Next ln
-                    If ok Then Set FindVoucherForRow = vn: Exit Function
-                End If
+        num = NodeText(vn, "VOUCHERNUMBER")
+        typ = NodeText(vn, "VOUCHERTYPENAME")
+        If typ = "" Then typ = CStr(vn.getAttribute("VCHTYPE") & "")
+        amtOk = False: ledOk = False
+        For Each ln In vn.SelectNodes(".//ALLLEDGERENTRIES.LIST|.//LEDGERENTRIES.LIST")
+            a = Abs(Val(Replace(NodeText(ln, "AMOUNT"), ",", "")))
+            If Abs(a - amount) < 0.005 Then amtOk = True
+            If StrComp(NodeText(ln, "LEDGERNAME"), ledger, vbTextCompare) = 0 Then
+                ledOk = True
+            End If
+        Next ln
+        numOk = (vno <> "" And NormNo(num) = NormNo(vno))
+        sc = 0
+        If numOk Then sc = sc + 8
+        If StrComp(typ, vtype, vbTextCompare) = 0 Then sc = sc + 4
+        If amtOk Then sc = sc + 4
+        If ledOk Then sc = sc + 2
+        dv = ParseTallyDate(NodeText(vn, "DATE"))
+        If Not IsEmpty(dv) Then
+            If CLng(CDate(dv)) = CLng(d) Then sc = sc + 1
+        End If
+        info = info & IIf(info = "", "", "; ") & typ & " No. " & num & IIf(amtOk, " amount ok", " other amount") & IIf(ledOk, "", " (no '" & ledger & "' line)")
+        ' a voucher must agree on the amount, and on the number when the row has one
+        If amtOk And (numOk Or vno = "" Or num = "") And sc >= 10 Then
+            If sc > bestSc Then
+                Set best = vn: bestSc = sc: nBest = 1
+            ElseIf sc = bestSc Then
+                nBest = nBest + 1
             End If
         End If
     Next vn
+    If nBest = 1 Then
+        Set FindVoucherForRow = best
+    ElseIf nBest > 1 Then
+        gFindWhy = "more than one voucher matches (" & info & ")"
+    Else
+        gFindWhy = "looked for " & vtype & " No. " & vno & " of " & Format$(amount, "#,##0.00") & " - Tally sent: " & info
+    End If
 End Function
 
 ' Also correct the matching posted row on the Entries sheet
@@ -2918,8 +2955,8 @@ Public Sub UpdateLedgerInTally()
                     nVch = doc.SelectNodes("//VOUCHER").Length
                     SaveDebug "Day Book " & Format$(d, "dd-mm-yyyy") & " - looking for " & CellText(ws.Cells(r, S_TYPE).Value) & " No. " & _
                         CellText(ws.Cells(r, S_NO).Value) & " id " & guid, gLastDayBook
-                    SetFxStatus ws, r, "Voucher not found: Tally's Day Book returned " & nVch & " voucher(s) for " & Format$(d, "dd-mm-yyyy") & _
-                        " - reply saved on TallyDebug sheet, please send a screenshot", CLR_ERR: nErr = nErr + 1
+                    SetFxStatus ws, r, "Voucher not found in Tally's Day Book for " & Format$(d, "dd-mm-yyyy") & " (" & nVch & " voucher(s)): " & _
+                        gFindWhy & ". Click Load entries and try again; if it repeats, send a screenshot of this row and the TallyDebug sheet.", CLR_ERR: nErr = nErr + 1
                     GoTo nextRow
                 End If
                 ' invoices with stock items are not changed from here
@@ -4270,7 +4307,8 @@ End Sub
 ' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
 Private Function HistoryText() As String
     Dim s As String
-    s = "2.3.3|14-Nov-2026|Dark mode removed to keep the file fast|Minor bug fixes"
+    s = "2.3.4|14-Nov-2026|Update in Tally finds the voucher reliably (voucher number + amount + type)|Minor bug fixes"
+    s = s & "##2.3.3|14-Nov-2026|Dark mode removed to keep the file fast|Minor bug fixes"
     s = s & "##2.3.2|13-Nov-2026|Make suspense file fixed - faster and more reliable|Smoother screen after long actions|Minor bug fixes"
     s = s & "##2.3.1|13-Nov-2026|Dark mode for every sheet (removed in 2.3.3)|WhatsApp opens in App or Browser (WhatsApp Web) - your choice|" & _
         "Readable info cards for the suspense file, email and WhatsApp steps|Reminders: 2-Step Verification + App password for email, log in to WhatsApp first|" & _
