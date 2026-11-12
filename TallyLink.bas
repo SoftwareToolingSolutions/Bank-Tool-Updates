@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.3.2"
+Public Const APP_VERSION As String = "2.3.3"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -62,7 +62,7 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Make suspense file fixed - faster and more reliable|Smoother screen after long actions (no left-over text)|Minor bug fixes"
+Private Const WHATS_NEW As String = "Dark mode removed - the file stays fast and light|Minor bug fixes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -3220,6 +3220,7 @@ Private Sub StartupWithSplash()
                     ApplyLayout223
                     ApplyLayout230
                     ApplyLayout231
+                    ApplyLayout233
                     ProtectFormulaSheets
             Case 2: RefreshTallyStatus
             Case 3: EnsureHelpUpdateGuide
@@ -3250,6 +3251,7 @@ plain:
     ApplyLayout223
     ApplyLayout230
     ApplyLayout231
+    ApplyLayout233
     ProtectFormulaSheets
     RefreshTallyStatus
     EnsureHelpUpdateGuide
@@ -4268,14 +4270,15 @@ End Sub
 ' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
 Private Function HistoryText() As String
     Dim s As String
-    s = "2.3.2|13-Nov-2026|Make suspense file fixed - faster and more reliable|Smoother screen after long actions|Minor bug fixes"
-    s = s & "##2.3.1|13-Nov-2026|Dark mode for every sheet|WhatsApp opens in App or Browser (WhatsApp Web) - your choice|" & _
+    s = "2.3.3|14-Nov-2026|Dark mode removed to keep the file fast|Minor bug fixes"
+    s = s & "##2.3.2|13-Nov-2026|Make suspense file fixed - faster and more reliable|Smoother screen after long actions|Minor bug fixes"
+    s = s & "##2.3.1|13-Nov-2026|Dark mode for every sheet (removed in 2.3.3)|WhatsApp opens in App or Browser (WhatsApp Web) - your choice|" & _
         "Readable info cards for the suspense file, email and WhatsApp steps|Reminders: 2-Step Verification + App password for email, log in to WhatsApp first|" & _
         "Password window says your password stays on this PC|Tidier Updates & info box|Minor bug fixes"
     s = s & "##2.3.0|12-Nov-2026|Suspense file - Excel of all Suspense entries with a dropdown of every ledger and a Remarks column|" & _
         "Send it by Email (your own mailbox) or WhatsApp, or Save as|Import the filled file back into Change Ledger|" & _
         "Email & WhatsApp settings with saved recipient, subject and message|Minor bug fixes"
-    s = s & "##2.2.3|11-Nov-2026|Dark mode - switch the dashboard between light and dark (button at the top right of Home)|" & _
+    s = s & "##2.2.3|11-Nov-2026|Dark mode for the dashboard (removed in 2.3.3)|" & _
         "All borders on every table (same as Alt+H+B+A)|Tidier Updates & info box and dashboard cards|Minor bug fixes"
     s = s & "##2.2.2|09-Nov-2026|Cleaner formatting - amounts with Indian commas and 2 decimals, and neat borders on every table|" & _
         "Last updated date shown on Home (Updates & info)|Update history - this page|Minor bugs fixed"
@@ -4410,7 +4413,6 @@ Private Sub ApplyLayout223()
     home.Protect Password:=SHEET_PW, DrawingObjects:=False, Contents:=True, Scenarios:=True, UserInterfaceOnly:=True
     home.EnableSelection = 0
     RefreshBankSummary
-    ThemeButton
     SetApp "A15", "Layout 2.2.3"
     SetApp "B15", "2.2.3"
 End Sub
@@ -5522,11 +5524,35 @@ Private Sub GridColour(ws As Worksheet, ByVal toDark As Boolean)
     Application.FindFormat.Clear: Application.ReplaceFormat.Clear
 End Sub
 
-' Button: Dark mode / Light mode - now for the whole workbook
+' Dark mode was removed in 2.3.3 (it slowed the file down). Old buttons only show a note.
 Public Sub ToggleTheme()
-    Dim ws As Worksheet, toDark As Boolean, lastR As Long, n As Long, k As Long, page As Boolean
     On Error Resume Next
-    toDark = Not IsDark()
+    DeleteThemeButton
+    Notify "Dark mode was removed to keep Postify fast.", "ok"
+End Sub
+
+Private Sub DeleteThemeButton()
+    Dim shp As Object
+    On Error Resume Next
+    For Each shp In ThisWorkbook.Worksheets("Home").Shapes
+        If shp.Name = "theme_btn" Then shp.Delete: Exit For
+    Next shp
+End Sub
+
+' One-time (2.3.3): back to light colours if dark mode was on, and remove the button
+Private Sub ApplyLayout233()
+    On Error Resume Next
+    If CStr(AppData().Range("B21").Value) = "2.3.3" Then Exit Sub
+    If IsDark() Then ApplyTheme False
+    DeleteThemeButton
+    SetApp "B14", "light"
+    SetApp "A21", "Layout 2.3.3"
+    SetApp "B21", "2.3.3"
+End Sub
+
+Private Sub ApplyTheme(ByVal toDark As Boolean)
+    Dim ws As Worksheet, lastR As Long, n As Long, k As Long, page As Boolean
+    On Error Resume Next
     ProgressShow IIf(toDark, "Switching to dark mode", "Switching to light mode"), "Restyling the sheets..."
     Application.ScreenUpdating = False
     n = ThisWorkbook.Worksheets.Count
@@ -5566,7 +5592,6 @@ Public Sub ToggleTheme()
     End If
     SetApp "A14", "Theme"
     SetApp "B14", IIf(toDark, "dark", "light")
-    ThemeButton
     Application.ScreenUpdating = True
     ProgressDone IIf(toDark, "Dark mode on", "Light mode on")
     LogAct "Theme", IIf(toDark, "Dark mode", "Light mode")
