@@ -7,7 +7,7 @@ Attribute VB_Name = "TallyLink"
 Option Explicit
 
 Public Const APP_NAME As String = "Postify Bank"
-Public Const APP_VERSION As String = "2.2.3"
+Public Const APP_VERSION As String = "2.3.0"
 Private gProgOn As Boolean, gProgTick As Single, gProgStart As Single
 
 Private Const FIRST_ROW As Long = 5
@@ -26,6 +26,8 @@ Private Const COL_Q As Long = 12          ' hidden: match quality 3 green / 2 ye
 Private Const SHEET_PW As String = "postify"
 Private Const LAYOUT_TAG As String = "2.2.0"
 Private Const BB_SHEET As String = "Bank Balances"
+Private Const FORMS_VER As String = "1"
+Private Const SUSP_MARK As String = "POSTIFY-SUSPENSE"
 Private Const BB_FIRST As Long = 6
 Private Const BB_NOTE As String = "* Statement balance is as per the bank statement provided by you (balance after the last transaction imported), " & _
     "and the Tally balance as per your Tally company on the same date. The statement you provided is the basis for this check."
@@ -59,8 +61,10 @@ Private gLSig() As String, gLLed() As String, gLSeen() As String, gLCnt() As Lon
 Private gLKind() As Long, gLLegacy() As Boolean, gLTok() As Variant, gLMark() As Long
 Private gLHKey() As String, gLHIdx() As Long, gTHKey() As String, gTHList() As String
 
-Private Const WHATS_NEW As String = "Minor bug fixes|" & _
-    "New: Dark mode - switch the dashboard between light and dark with the button at the top right of Home"
+Private Const WHATS_NEW As String = "New: Suspense file - one click makes an Excel of your Suspense entries with a ledger dropdown for every entry (Change Ledger > Make suspense file)|" & _
+    "Send it straight from Postify by Email or WhatsApp, or Save as anywhere|" & _
+    "Import the filled file back - the chosen ledgers go straight into Change Ledger, ready for Update in Tally|" & _
+    "Minor bug fixes"
 
 Private gNames() As String, gGroups() As String, gComp() As String, gTok() As Variant
 Private gDig() As String, gIni() As String, gDFKey() As String, gDFCnt() As Long
@@ -3050,6 +3054,9 @@ Public Sub AppStartup()
         Application.OnTime Now + TimeSerial(0, 0, 1), "TallyLink.ShowWhatsNew"
     End If
     Application.OnTime Now + TimeSerial(0, 0, 4), "Updater.AutoCheck"
+    If Not FormExists("PfySend") Or CStr(AppData().Range("B18").Value) <> FORMS_VER Then
+        Application.OnTime Now + TimeSerial(0, 0, 7), "TallyLink.BuildFormsQuiet"
+    End If
 End Sub
 
 ' Clean look on dashboard-style sheets + a soft fade-in when a sheet tab is clicked
@@ -3208,6 +3215,7 @@ Private Sub StartupWithSplash()
                     ApplyLayout222
                     ApplyAmountFormats
                     ApplyLayout223
+                    ApplyLayout230
                     ProtectFormulaSheets
             Case 2: RefreshTallyStatus
             Case 3: EnsureHelpUpdateGuide
@@ -3236,6 +3244,7 @@ plain:
     ApplyLayout222
     ApplyAmountFormats
     ApplyLayout223
+    ApplyLayout230
     ProtectFormulaSheets
     RefreshTallyStatus
     EnsureHelpUpdateGuide
@@ -3728,7 +3737,7 @@ Public Sub ShowWhatsNew()
     CoverRect l, t, w, h
     Set shp = NewBox(ws, "wn_ov", 1, l, t, w, h, RGB(11, 31, 58))
     shp.Fill.Transparency = 0.45
-    shp.OnAction = "TallyLink.WhatsNewHide"
+    shp.OnAction = "TallyLink.WhatsNewGotIt"
     ViewRect l, t, w, h
     cw = 500
     If cw > w - 20 Then cw = w - 20
@@ -3772,7 +3781,7 @@ Public Sub ShowWhatsNew()
     shp.Adjustments.Item(1) = 0.25
     StyleText shp, "Got it", 11, RGB(255, 255, 255), True, 2
     shp.TextFrame2.VerticalAnchor = 3
-    shp.OnAction = "TallyLink.WhatsNewHide"
+    shp.OnAction = "TallyLink.WhatsNewGotIt"
     card.Height = y + 34 + 26 - ct
     Application.ScreenUpdating = True
     LogAct "Updated", APP_NAME & " v" & APP_VERSION & " installed"
@@ -3784,6 +3793,11 @@ End Sub
 
 Public Sub WhatsNewHide()
     DeleteShapes "wn_"
+End Sub
+
+Public Sub WhatsNewGotIt()
+    WhatsNewHide
+    If CStr(AppData().Range("B17").Value) = "" Then MailIntro
 End Sub
 
 Public Sub WhatsNewNoop()
@@ -4245,7 +4259,10 @@ End Sub
 ' Every version and what it brought (newest first): "version|date|item|item..." separated by "##"
 Private Function HistoryText() As String
     Dim s As String
-    s = "2.2.3|11-Nov-2026|Dark mode - switch the dashboard between light and dark (button at the top right of Home)|" & _
+    s = "2.3.0|12-Nov-2026|Suspense file - Excel of all Suspense entries with a dropdown of every ledger and a Remarks column|" & _
+        "Send it by Email (your own mailbox) or WhatsApp, or Save as|Import the filled file back into Change Ledger|" & _
+        "Email & WhatsApp settings with saved recipient, subject and message|Minor bug fixes"
+    s = s & "##2.2.3|11-Nov-2026|Dark mode - switch the dashboard between light and dark (button at the top right of Home)|" & _
         "All borders on every table (same as Alt+H+B+A)|Tidier Updates & info box and dashboard cards|Minor bug fixes"
     s = s & "##2.2.2|09-Nov-2026|Cleaner formatting - amounts with Indian commas and 2 decimals, and neat borders on every table|" & _
         "Last updated date shown on Home (Updates & info)|Update history - this page|Minor bugs fixed"
@@ -4461,4 +4478,766 @@ Public Sub ToggleTheme()
     ThemeButton
     Application.ScreenUpdating = True
     LogAct "Dashboard theme", IIf(toDark, "Dark mode", "Light mode")
+End Sub
+
+'==============================================================
+'  v2.3: SUSPENSE FILE  (make -> Email / WhatsApp / Save as -> import back)
+'==============================================================
+Private Sub SetSetting(ByVal nm As String, ByVal v As Variant)
+    On Error Resume Next
+    ThisWorkbook.Names(nm).RefersToRange.Value = v
+End Sub
+
+Private Function MailDomain(ByVal em As String) As String
+    If InStr(em, "@") > 0 Then MailDomain = LCase$(Trim$(Mid$(em, InStr(em, "@") + 1)))
+End Function
+
+' Outlook.com / Hotmail / Microsoft 365: password sending is being switched off by Microsoft
+Private Function IsMicrosoftMail(ByVal em As String, ByVal server As String) As Boolean
+    Select Case MailDomain(em)
+        Case "outlook.com", "outlook.in", "hotmail.com", "hotmail.co.in", "live.com", "live.in", "msn.com"
+            IsMicrosoftMail = True
+    End Select
+    If InStr(1, server, "office365", vbTextCompare) > 0 Or InStr(1, server, "outlook", vbTextCompare) > 0 Then IsMicrosoftMail = True
+End Function
+
+' Known mail servers by address (others: user fills Settings)
+Private Sub MailPreset(ByVal em As String, ByRef server As String, ByRef port As Long)
+    server = "": port = 465
+    Select Case MailDomain(em)
+        Case "gmail.com", "googlemail.com": server = "smtp.gmail.com"
+        Case "yahoo.com", "yahoo.co.in", "yahoo.in", "ymail.com", "rocketmail.com": server = "smtp.mail.yahoo.com"
+        Case "zoho.com": server = "smtp.zoho.com"
+        Case "zohomail.in", "zoho.in": server = "smtp.zoho.in"
+        Case "rediffmail.com": server = "smtp.rediffmail.com"
+        Case "outlook.com", "outlook.in", "hotmail.com", "hotmail.co.in", "live.com", "live.in", "msn.com"
+            server = "smtp-mail.outlook.com": port = 587
+    End Select
+End Sub
+
+Private Function Obf(ByVal txt As String, ByVal decode As Boolean) As String
+    Dim k As String, i As Long, out As String, c As Long
+    k = "Pf9#yB4nk!q2"
+    On Error GoTo fin
+    If decode Then
+        For i = 1 To Len(txt) \ 4
+            c = CLng("&H" & Mid$(txt, (i - 1) * 4 + 1, 4)) Xor AscW(Mid$(k, ((i - 1) Mod Len(k)) + 1, 1))
+            out = out & ChrW(c)
+        Next i
+    Else
+        For i = 1 To Len(txt)
+            c = (AscW(Mid$(txt, i, 1)) And &HFFFF&) Xor AscW(Mid$(k, ((i - 1) Mod Len(k)) + 1, 1))
+            out = out & Right$("0000" & Hex$(c), 4)
+        Next i
+    End If
+    Obf = out
+fin:
+End Function
+
+Private Function DocsFolder() As String
+    Dim p As String
+    On Error Resume Next
+    p = CreateObject("WScript.Shell").SpecialFolders("MyDocuments")
+    If p = "" Then p = Environ$("USERPROFILE") & "\Documents"
+    p = p & "\Postify Suspense"
+    If Dir(p, vbDirectory) = "" Then MkDir p
+    DocsFolder = p
+End Function
+
+Private Function FileSafe(ByVal s As String) As String
+    Dim ch As Variant
+    For Each ch In Array("\", "/", ":", "*", "?", """", "<", ">", "|")
+        s = Replace(s, ch, "-")
+    Next ch
+    FileSafe = Trim$(s)
+End Function
+
+' Build the Excel for the person who knows the entries. Returns the saved path ("" if failed)
+Private Function BuildSuspenseWorkbook(vc As Collection, ByVal sus As String, ByVal dFrom As Date, ByVal dTo As Date) As String
+    Dim wb As Workbook, ws As Worksheet, wl As Worksheet, src As Worksheet, v As Variant, r As Long, k As Long
+    Dim lastL As Long, lv As Variant, n As Long, co As String, path As String, hd As Variant, i As Long, nRows As Long
+    On Error GoTo fail
+    co = SettingValue("CompanyName")
+    If co = "" Then co = "Company"
+    Application.ScreenUpdating = False
+    Set wb = Workbooks.Add(-4167)
+    Set ws = wb.Worksheets(1)
+    ws.Name = "Suspense"
+    Set wl = wb.Worksheets.Add(After:=ws)
+    wl.Name = "Ledgers"
+    ' --- ledger list as on today
+    Set src = ThisWorkbook.Worksheets("Ledgers")
+    lastL = src.Cells(src.Rows.Count, 1).End(xlUp).Row
+    wl.Cells.Font.Name = "Segoe UI": wl.Cells.Font.Size = 10
+    wl.Range("A1").Value = "Ledgers in Tally as on " & Format$(Date, "dd-mm-yyyy")
+    wl.Range("A1").Font.Bold = True: wl.Range("A1").Font.Size = 12
+    wl.Range("A2:B2").Value = Array("Ledger", "Group")
+    wl.Range("A2:B2").Font.Bold = True: wl.Range("A2:B2").Interior.Color = RGB(226, 232, 240)
+    n = 0
+    If lastL >= 2 Then
+        lv = src.Range("A2:C" & lastL).Value
+        For k = 1 To UBound(lv, 1)
+            If CellText(lv(k, 1)) <> "" Then
+                n = n + 1
+                wl.Cells(2 + n, 1).Value = CellText(lv(k, 1))
+                wl.Cells(2 + n, 2).Value = IIf(CellText(lv(k, 3)) <> "", CellText(lv(k, 3)), CellText(lv(k, 2)))
+            End If
+        Next k
+    End If
+    If n = 0 Then n = 1
+    wb.Names.Add Name:="LedgerList", RefersTo:="=Ledgers!$A$3:$A$" & (n + 2)
+    wl.Columns("A").ColumnWidth = 45: wl.Columns("B").ColumnWidth = 30
+    GridBorders wl.Range("A2:B" & (n + 2))
+    ' --- suspense sheet
+    ws.Cells.Font.Name = "Segoe UI": ws.Cells.Font.Size = 10
+    ws.Range("A1").Value = "Suspense entries - " & co
+    ws.Range("A1").Font.Bold = True: ws.Range("A1").Font.Size = 15: ws.Range("A1").Font.Color = RGB(255, 255, 255)
+    ws.Range("A1:J1").Interior.Color = RGB(11, 31, 58)
+    ws.Rows(1).RowHeight = 30: ws.Range("A1").VerticalAlignment = -4108
+    ws.Range("A2").Value = "Ledger: " & sus & "     Period: " & Format$(dFrom, "dd-mm-yyyy") & " to " & Format$(dTo, "dd-mm-yyyy") & _
+        "     Entries: " & vc.Count & "     Extracted on: " & Format$(Date, "dd-mm-yyyy")
+    ws.Range("A2").Font.Color = RGB(71, 85, 105)
+    ws.Range("A3").Value = "Please choose the correct ledger for each entry in the yellow column (pick from the dropdown), add a remark if needed, save and send this file back."
+    ws.Range("A3").Font.Bold = True: ws.Range("A3").Font.Color = RGB(180, 83, 9)
+    hd = Array("Date", "Voucher Type", "Voucher No", "Bank / Other side", "Debit", "Credit", "Narration", "Current Ledger", "Correct Ledger", "Remarks", "Id")
+    For i = 0 To 10
+        ws.Cells(5, i + 1).Value = hd(i)
+    Next i
+    With ws.Range("A5:J5")
+        .Font.Bold = True: .Font.Color = RGB(255, 255, 255): .Interior.Color = RGB(19, 52, 94)
+        .HorizontalAlignment = -4108: .VerticalAlignment = -4108: .WrapText = True
+    End With
+    ws.Rows(5).RowHeight = 30
+    r = 6
+    For Each v In vc
+        ws.Cells(r, 1).Value = v(0)
+        ws.Cells(r, 2).Value = v(3)
+        ws.Cells(r, 3).NumberFormat = "@": ws.Cells(r, 3).Value = CStr(v(4))
+        ws.Cells(r, 4).Value = v(5)
+        If v(1) Then ws.Cells(r, 5).Value = v(2) Else ws.Cells(r, 6).Value = v(2)
+        ws.Cells(r, 7).Value = v(6)
+        ws.Cells(r, 8).Value = sus
+        ws.Cells(r, 11).NumberFormat = "@": ws.Cells(r, 11).Value = CStr(v(8))
+        r = r + 1
+    Next v
+    nRows = r - 6
+    ws.Range("A6:A" & r - 1).NumberFormat = "dd-mm-yyyy"
+    ws.Range("E6:F" & r - 1).NumberFormat = "_ * #,##0.00_ ;_ * -#,##0.00_ ;_ * ""-""??_ ;_ @_ "
+    ws.Range("G6:G" & r - 1).WrapText = True
+    ws.Range("A6:J" & r - 1).VerticalAlignment = -4108
+    ws.Range("I6:I" & r - 1).Interior.Color = RGB(255, 248, 225)
+    ws.Range("J6:J" & r - 1).Interior.Color = RGB(255, 255, 255)
+    ws.Range("J6:J" & r - 1).WrapText = True
+    With ws.Range("I6:I" & r - 1).Validation
+        .Delete
+        .Add Type:=3, AlertStyle:=2, Operator:=1, Formula1:="=LedgerList"
+        .IgnoreBlank = True: .InCellDropdown = True
+        .ErrorTitle = "Ledger": .ErrorMessage = "Please pick a ledger from the list (sheet Ledgers)."
+    End With
+    GridBorders ws.Range("A5:J" & r - 1)
+    hd = Array(12, 13, 12, 26, 14, 14, 50, 22, 32, 30)
+    For i = 0 To 9: ws.Columns(i + 1).ColumnWidth = hd(i): Next i
+    ws.Range("A6:J" & r - 1).Rows.AutoFit
+    ' hidden: voucher id + period, used when the file comes back
+    ws.Columns("K:O").Hidden = True
+    ws.Range("M1").Value = dFrom: ws.Range("N1").Value = dTo: ws.Range("O1").Value = SUSP_MARK
+    ' footnote
+    ws.Cells(r + 1, 1).Value = "Generated by " & APP_NAME & " v" & APP_VERSION & " on " & Format$(Now, "dd-mm-yyyy hh:nn")
+    With ws.Cells(r + 1, 1).Font
+        .Italic = True: .Size = 8: .Color = RGB(148, 163, 184)
+    End With
+    ws.PageSetup.CenterFooter = "&I&8Generated by " & APP_NAME
+    ws.PageSetup.Orientation = 2
+    ws.Activate
+    ws.Range("A6").Select
+    ActiveWindow.FreezePanes = True
+    ActiveWindow.DisplayGridlines = False
+    ' only the yellow and remarks columns can be typed in
+    ws.Cells.Locked = True
+    ws.Range("I6:J" & r - 1).Locked = False
+    ws.Range("A5:J" & r - 1).AutoFilter
+    ws.Protect DrawingObjects:=True, Contents:=True, AllowFiltering:=True, AllowFormattingColumns:=True, AllowFormattingRows:=True
+    path = DocsFolder() & "\" & FileSafe("Suspense - " & co & " - " & Format$(Date, "dd-mm-yyyy")) & ".xlsx"
+    Application.DisplayAlerts = False
+    wb.SaveAs fileName:=path, FileFormat:=51
+    Application.DisplayAlerts = True
+    wb.Close SaveChanges:=False
+    ThisWorkbook.Activate
+    Application.ScreenUpdating = True
+    BuildSuspenseWorkbook = path
+    Exit Function
+fail:
+    Application.DisplayAlerts = True
+    On Error Resume Next
+    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    ThisWorkbook.Activate
+    Application.ScreenUpdating = True
+    MsgBox "The suspense file could not be made: " & Err.Description, vbExclamation, APP_NAME
+End Function
+
+'================ BUTTON (Change Ledger): Make suspense file ================
+Public Sub MakeSuspenseFile()
+    Dim sus As String, dFrom As Variant, dTo As Variant, vc As Collection, info As String, path As String
+    sus = SuspenseLedgerName()
+    If sus = "" Then MsgBox "No Suspense ledger found in the ledger list (click Load ledgers).", vbExclamation, APP_NAME: Exit Sub
+    dFrom = ParseDateCell(FxSheet().Range("E2").Value)
+    If IsEmpty(dFrom) Then dFrom = FyStart()
+    dTo = ParseDateCell(FxSheet().Range("G2").Value)
+    If IsEmpty(dTo) Then dTo = Date
+    ProgressShow "Making the suspense file", "Reading '" & sus & "' from Tally..."
+    Set vc = FetchBankVouchers(sus, CDate(dFrom), CDate(dTo), True, info)
+    If vc Is Nothing Then ProgressHide: ConnectionHelp info: Exit Sub
+    If vc.Count = 0 Then
+        ProgressHide
+        Notify "No Suspense entries from " & Format$(dFrom, "dd-mm-yyyy") & " to " & Format$(dTo, "dd-mm-yyyy") & "." & vbCrLf & _
+            "Change the From / To dates on Change Ledger if needed.", "ok"
+        Exit Sub
+    End If
+    ProgressUpdate 0.6, "Building the Excel file (" & vc.Count & " entries)..."
+    path = BuildSuspenseWorkbook(vc, sus, CDate(dFrom), CDate(dTo))
+    If path = "" Then ProgressHide: Exit Sub
+    ProgressDone "File ready"
+    LogAct "Suspense file", vc.Count & " entries -> " & Mid$(path, InStrRev(path, "\") + 1), vc.Count
+    SendSuspenseDialog path, CDate(dFrom), CDate(dTo), vc.Count
+End Sub
+
+Private Function FillPlaceholders(ByVal t As String, ByVal dFrom As Date, ByVal dTo As Date, ByVal n As Long) As String
+    Dim co As String
+    co = SettingValue("CompanyName")
+    t = Replace(t, "{company}", co)
+    t = Replace(t, "{period}", Format$(dFrom, "dd-mm-yyyy") & " to " & Format$(dTo, "dd-mm-yyyy"))
+    t = Replace(t, "{count}", CStr(n))
+    FillPlaceholders = t
+End Function
+
+' Pop-up: Send Email / Send on WhatsApp / Save as. Saved details are pre-filled and can be edited for this send.
+Private Sub SendSuspenseDialog(ByVal path As String, ByVal dFrom As Date, ByVal dTo As Date, ByVal n As Long)
+    Dim f As Object, ch As String, sTo As String, sMob As String, sSub As String, sMsg As String
+    Dim cTo As String, cMob As String, cSub As String, cMsg As String, done As Boolean, k As Variant, note As String
+    sTo = SettingValue("SendToEmail"): sMob = SettingValue("SendToMobile")
+    sSub = FillPlaceholders(SettingValue("SendSubject"), dFrom, dTo, n)
+    sMsg = FillPlaceholders(Replace(ThisWorkbook.Names("SendMessage").RefersToRange.Value, vbLf, vbCrLf), dFrom, dTo, n)
+    cTo = sTo: cMob = sMob: cSub = sSub: cMsg = sMsg
+    If IsMicrosoftMail(SettingValue("MailFrom"), SettingValue("MailServer")) Then
+        note = "Note: Outlook / Hotmail / Microsoft 365 mail may not send from here (Microsoft has switched off password sending). WhatsApp is recommended."
+    End If
+    If Not FormReady("PfySend") Then
+        ' simple fallback without the pop-up window
+        k = Application.InputBox("File ready: " & Mid$(path, InStrRev(path, "\") + 1) & vbCrLf & vbCrLf & _
+            "1 = Send Email" & vbCrLf & "2 = Send on WhatsApp" & vbCrLf & "3 = Save as..." & IIf(note <> "", vbCrLf & vbCrLf & note, ""), APP_NAME, 1, Type:=1)
+        If VarType(k) = vbBoolean Then Exit Sub
+        Select Case CLng(k)
+            Case 1
+                k = Application.InputBox("Send to (email):", APP_NAME, sTo, Type:=2)
+                If VarType(k) <> vbBoolean Then DoSendEmail path, CStr(k), cSub, cMsg
+            Case 2
+                k = Application.InputBox("WhatsApp mobile number:", APP_NAME, sMob, Type:=2)
+                If VarType(k) <> vbBoolean Then DoWhatsApp path, CStr(k), cMsg
+            Case 3: DoSaveAs path
+        End Select
+        Exit Sub
+    End If
+    Do
+        Set f = VBA.UserForms.Add("PfySend")
+        f.Controls("lblFile").Caption = "File ready:  " & Mid$(path, InStrRev(path, "\") + 1) & "   (" & n & " entries)"
+        f.Controls("txtTo").Text = cTo: f.Controls("txtTo").Tag = sTo
+        f.Controls("txtMob").Text = cMob: f.Controls("txtMob").Tag = sMob
+        f.Controls("txtSub").Text = cSub: f.Controls("txtSub").Tag = sSub
+        f.Controls("txtMsg").Text = cMsg: f.Controls("txtMsg").Tag = sMsg
+        f.Controls("lblNote").Caption = note
+        f.Show
+        ch = f.Choice
+        cTo = Trim$(f.Controls("txtTo").Text): cMob = Trim$(f.Controls("txtMob").Text)
+        cSub = f.Controls("txtSub").Text: cMsg = f.Controls("txtMsg").Text
+        If f.Controls("chkDefault").Value And ch <> "" Then
+            SetSetting "SendToEmail", cTo: SetSetting "SendToMobile", cMob
+            sTo = cTo: sMob = cMob
+        End If
+        Unload f
+        Set f = Nothing
+        Select Case ch
+            Case "email": done = DoSendEmail(path, cTo, cSub, cMsg)
+            Case "wa": done = DoWhatsApp(path, cMob, cMsg)
+            Case "save": done = DoSaveAs(path)
+            Case Else
+                Notify "The suspense file is saved in:" & vbCrLf & DocsFolder(), "ok"
+                done = True
+        End Select
+    Loop Until done
+End Sub
+
+Private Function DoSaveAs(ByVal path As String) As Boolean
+    Dim fn As Variant
+    fn = Application.GetSaveAsFilename(InitialFileName:=Mid$(path, InStrRev(path, "\") + 1), FileFilter:="Excel Workbook (*.xlsx), *.xlsx", Title:="Save the suspense file")
+    If VarType(fn) = vbBoolean Then Exit Function
+    On Error GoTo fail
+    If StrComp(CStr(fn), path, vbTextCompare) <> 0 Then FileCopy path, CStr(fn)
+    Notify "Suspense file saved:" & vbCrLf & CStr(fn), "ok"
+    LogAct "Suspense file", "Saved as " & CStr(fn)
+    DoSaveAs = True
+    Exit Function
+fail:
+    MsgBox "Could not save there: " & Err.Description, vbExclamation, APP_NAME
+End Function
+
+' UTF-8 URL encoding (for the WhatsApp message)
+Private Function UrlEnc(ByVal s As String) As String
+    Dim i As Long, c As Long, out As String, ch As String
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1): c = AscW(ch) And &HFFFF&
+        If (c >= 48 And c <= 57) Or (c >= 65 And c <= 90) Or (c >= 97 And c <= 122) Or ch = "-" Or ch = "." Or ch = "_" Or ch = "~" Then
+            out = out & ch
+        ElseIf c < 128 Then
+            out = out & "%" & Right$("0" & Hex$(c), 2)
+        ElseIf c < 2048 Then
+            out = out & "%" & Hex$(192 + (c \ 64)) & "%" & Hex$(128 + (c And 63))
+        Else
+            out = out & "%" & Hex$(224 + (c \ 4096)) & "%" & Hex$(128 + ((c \ 64) And 63)) & "%" & Hex$(128 + (c And 63))
+        End If
+    Next i
+    UrlEnc = out
+End Function
+
+Private Function DoWhatsApp(ByVal path As String, ByVal mob As String, ByVal msg As String) As Boolean
+    Dim d As String, i As Long, ch As String, url As String
+    For i = 1 To Len(mob)
+        ch = Mid$(mob, i, 1)
+        If ch Like "#" Then d = d & ch
+    Next i
+    If Len(d) = 11 And Left$(d, 1) = "0" Then d = Mid$(d, 2)
+    If Len(d) = 10 Then d = "91" & d
+    If Len(d) < 11 Then MsgBox "Please enter a valid mobile number (10 digits, or with country code).", vbExclamation, APP_NAME: Exit Function
+    msg = Replace(msg, vbCrLf, vbLf)
+    On Error Resume Next
+    url = "whatsapp://send?phone=" & d & "&text=" & UrlEnc(msg)
+    ThisWorkbook.FollowHyperlink url
+    If Err.Number <> 0 Then
+        Err.Clear
+        ThisWorkbook.FollowHyperlink "https://wa.me/" & d & "?text=" & UrlEnc(msg)
+    End If
+    Shell "explorer.exe /select,""" & path & """", vbNormalFocus
+    On Error GoTo 0
+    LogAct "Suspense file", "WhatsApp opened for +" & d
+    MsgBox "WhatsApp is opening with the message for +" & d & "." & vbCrLf & vbCrLf & _
+        "The file's folder is open too - drag '" & Mid$(path, InStrRev(path, "\") + 1) & "' into the chat (or use the paperclip), then press Send.", vbInformation, APP_NAME
+    DoWhatsApp = True
+End Function
+
+' Ask for the mail password (dots, Show password, Remember)
+Private Function PwdPrompt(ByVal em As String, ByRef remember As Boolean, ByRef cancelled As Boolean) As String
+    Dim f As Object, v As Variant
+    cancelled = False
+    If FormReady("PfyPwd") Then
+        Set f = VBA.UserForms.Add("PfyPwd")
+        f.Controls("lblP").Caption = "Mail password for " & em & vbCrLf & "(Gmail / Yahoo: use the 16-letter App password)"
+        f.Controls("chkRem").Value = remember
+        f.Show
+        If f.Choice = "ok" Then
+            PwdPrompt = f.Controls("txtPwd").Text
+            remember = f.Controls("chkRem").Value
+        Else
+            cancelled = True
+        End If
+        Unload f
+    Else
+        v = Application.InputBox("Mail password for " & em & " (Gmail / Yahoo: the App password):", APP_NAME, "", Type:=2)
+        If VarType(v) = vbBoolean Then cancelled = True Else PwdPrompt = CStr(v)
+    End If
+End Function
+
+Private Function DoSendEmail(ByVal path As String, ByVal sendTo As String, ByVal subj As String, ByVal body As String) As Boolean
+    Dim em As String, server As String, port As Long, ssl As Boolean, pwd As String, remember As Boolean, cancelled As Boolean
+    Dim usedSaved As Boolean, m As Object, cfg As Object, pre As String, v As Variant, errTxt As String
+    sendTo = Trim$(sendTo)
+    If InStr(sendTo, "@") = 0 Then MsgBox "Please enter the email address to send to.", vbExclamation, APP_NAME: Exit Function
+    em = SettingValue("MailFrom")
+    If em = "" Then
+        v = Application.InputBox("Your email address (the file is sent from this mailbox):", APP_NAME, "", Type:=2)
+        If VarType(v) = vbBoolean Then Exit Function
+        em = Trim$(CStr(v))
+        If InStr(em, "@") = 0 Then Exit Function
+        SetSetting "MailFrom", em
+    End If
+    server = SettingValue("MailServer")
+    port = Val(SettingValue("MailPort"))
+    If server = "" Then
+        MailPreset em, server, port
+        If server = "" Then
+            MsgBox "Postify does not know the mail server for '" & MailDomain(em) & "'." & vbCrLf & vbCrLf & _
+                "Please fill 'Mail server' and 'Port' on the Settings sheet (ask your mail provider - e.g. Google Workspace: smtp.gmail.com / 465, " & _
+                "Zoho: smtp.zoho.in / 465). Then click Send Email again." & vbCrLf & vbCrLf & "Tip: WhatsApp needs no setup.", vbInformation, APP_NAME
+            GoSheet "Settings", "B20"
+            Exit Function
+        End If
+        SetSetting "MailServer", server: SetSetting "MailPort", port
+    End If
+    If port = 0 Then port = 465
+    ssl = (LCase$(SettingValue("MailSSL")) <> "no")
+    remember = (LCase$(SettingValue("MailRemember")) <> "no")
+    If remember And CStr(AppData().Range("B16").Value) <> "" Then
+        pwd = Obf(CStr(AppData().Range("B16").Value), True): usedSaved = True
+    Else
+        pwd = PwdPrompt(em, remember, cancelled)
+        If cancelled Or pwd = "" Then Exit Function
+    End If
+    ProgressShow "Sending email", "Connecting to " & server & "..."
+    On Error GoTo fail
+    Set cfg = CreateObject("CDO.Configuration")
+    pre = "http://schemas.microsoft.com/cdo/configuration/"
+    With cfg.Fields
+        .Item(pre & "sendusing") = 2
+        .Item(pre & "smtpserver") = server
+        .Item(pre & "smtpserverport") = port
+        .Item(pre & "smtpauthenticate") = 1
+        .Item(pre & "sendusername") = em
+        .Item(pre & "sendpassword") = pwd
+        .Item(pre & "smtpusessl") = ssl
+        .Item(pre & "smtpconnectiontimeout") = 40
+        .Update
+    End With
+    Set m = CreateObject("CDO.Message")
+    Set m.Configuration = cfg
+    m.From = em
+    m.To = sendTo
+    m.Subject = subj
+    m.TextBody = body
+    m.AddAttachment path
+    ProgressUpdate 0.6, "Sending to " & sendTo & "..."
+    m.Send
+    On Error GoTo 0
+    ProgressDone "Email sent"
+    If remember And Not usedSaved Then
+        SetApp "B16", Obf(pwd, False)
+        SetSetting "MailRemember", "Yes"
+    ElseIf Not remember Then
+        SetApp "B16", ""
+    End If
+    LogAct "Suspense file", "Emailed to " & sendTo & " from " & em
+    Notify "Email sent to " & sendTo & vbCrLf & "with " & Mid$(path, InStrRev(path, "\") + 1), "ok"
+    DoSendEmail = True
+    Exit Function
+fail:
+    errTxt = Err.Description
+    On Error Resume Next
+    ProgressHide
+    If usedSaved Then SetApp "B16", ""        ' a saved password that fails is forgotten - it will be asked next time
+    MsgBox "The email could not be sent." & vbCrLf & vbCrLf & errTxt & vbCrLf & vbCrLf & _
+        "Please check:" & vbCrLf & _
+        "  - Gmail / Yahoo need an App password (not your normal password)." & vbCrLf & _
+        "  - Mail server / Port on Settings (now " & server & " / " & port & ")." & vbCrLf & _
+        "  - Internet connection." & vbCrLf & _
+        IIf(IsMicrosoftMail(em, server), "  - Outlook / Hotmail may not allow this at all - use WhatsApp instead." & vbCrLf, "") & vbCrLf & _
+        "The pop-up opens again so you can retry or choose WhatsApp / Save as.", vbExclamation, APP_NAME
+End Function
+
+'================ BUTTON (Change Ledger): Import filled suspense file ================
+Public Sub ImportFilledSuspense()
+    Dim fn As Variant, wb As Workbook, ws As Worksheet, fx As Worksheet, r As Long, lastR As Long, rr As Long, fxLast As Long
+    Dim guid As String, newL As String, rem_ As String, nFill As Long, nUnknown As Long, nMiss As Long, found As Boolean
+    Dim sus As String, dFrom As Variant, dTo As Variant, hdrRow As Long, cId As Long, cNew As Long, cRem As Long, c As Long, msg As String
+    fn = Application.GetOpenFilename("Excel files (*.xlsx;*.xls;*.xlsm),*.xlsx;*.xls;*.xlsm", , "Choose the filled suspense file")
+    If VarType(fn) = vbBoolean Then Exit Sub
+    ProgressShow "Importing filled suspense file", "Opening " & Mid$(CStr(fn), InStrRev(CStr(fn), "\") + 1) & "..."
+    On Error GoTo fail
+    Application.ScreenUpdating = False
+    Set wb = Workbooks.Open(CStr(fn), UpdateLinks:=0, ReadOnly:=True)
+    On Error Resume Next
+    Set ws = wb.Worksheets("Suspense")
+    On Error GoTo fail
+    If ws Is Nothing Then Set ws = wb.Worksheets(1)
+    For r = 1 To 15
+        For c = 1 To 15
+            If LCase$(CellText(ws.Cells(r, c).Value)) = "correct ledger" Then hdrRow = r: cNew = c
+            If LCase$(CellText(ws.Cells(r, c).Value)) = "remarks" Then cRem = c
+            If LCase$(CellText(ws.Cells(r, c).Value)) = "id" Then cId = c
+        Next c
+        If hdrRow > 0 Then Exit For
+    Next r
+    If hdrRow = 0 Then
+        wb.Close SaveChanges:=False
+        ThisWorkbook.Activate: Application.ScreenUpdating = True: ProgressHide
+        MsgBox "This does not look like a Postify suspense file (no 'Correct Ledger' column).", vbExclamation, APP_NAME
+        Exit Sub
+    End If
+    If cId = 0 Then cId = 11
+    dFrom = ParseDateCell(ws.Range("M1").Value): dTo = ParseDateCell(ws.Range("N1").Value)
+    ' make sure Change Ledger shows these Suspense entries
+    Set fx = FxSheet()
+    sus = SuspenseLedgerName()
+    lastR = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    fxLast = fx.Cells(fx.Rows.Count, S_DATE).End(xlUp).Row
+    found = False
+    For r = hdrRow + 1 To lastR
+        guid = CellText(ws.Cells(r, cId).Value)
+        If guid <> "" Then
+            For rr = S_FIRST To fxLast
+                If CellText(fx.Cells(rr, S_GUID).Value) = guid Then found = True: Exit For
+            Next rr
+        End If
+        If found Then Exit For
+    Next r
+    If Not found And sus <> "" Then
+        ProgressUpdate 0.3, "Loading the Suspense entries into Change Ledger..."
+        fx.Range("B2").Value = sus
+        If Not IsEmpty(dFrom) Then fx.Range("E2").Value = dFrom
+        If Not IsEmpty(dTo) Then fx.Range("G2").Value = dTo
+        msg = LoadFixCore(True)
+        fxLast = fx.Cells(fx.Rows.Count, S_DATE).End(xlUp).Row
+    End If
+    ProgressUpdate 0.7, "Copying the chosen ledgers..."
+    For r = hdrRow + 1 To lastR
+        guid = CellText(ws.Cells(r, cId).Value)
+        newL = CellText(ws.Cells(r, cNew).Value)
+        rem_ = ""
+        If cRem > 0 Then rem_ = CellText(ws.Cells(r, cRem).Value)
+        If guid <> "" And (newL <> "" Or rem_ <> "") Then
+            found = False
+            For rr = S_FIRST To fxLast
+                If CellText(fx.Cells(rr, S_GUID).Value) = guid Then
+                    found = True
+                    If newL <> "" And LCase$(Left$(CellText(fx.Cells(rr, S_STATUS).Value), 7)) <> "updated" Then
+                        fx.Cells(rr, S_NEW).Value = newL
+                        nFill = nFill + 1
+                        If Not LedgerExists(newL) Then nUnknown = nUnknown + 1: fx.Cells(rr, S_NEW).Interior.Color = CLR_ERR
+                    End If
+                    If rem_ <> "" And CellText(fx.Cells(rr, S_STATUS).Value) = "" Then fx.Cells(rr, S_STATUS).Value = "Remark: " & rem_
+                    FitRow fx, rr
+                    Exit For
+                End If
+            Next rr
+            If Not found Then nMiss = nMiss + 1
+        End If
+    Next r
+    wb.Close SaveChanges:=False
+    ThisWorkbook.Activate
+    Application.ScreenUpdating = True
+    ProgressDone "Imported"
+    QuietActivate fx
+    LogAct "Import filled suspense file", nFill & " ledgers from " & Mid$(CStr(fn), InStrRev(CStr(fn), "\") + 1), nFill
+    msg = nFill & " correct ledger(s) copied into the yellow column." & vbCrLf
+    If nUnknown > 0 Then msg = msg & nUnknown & " are not in your ledger list (red) - pick another ledger or create it in Tally and Load ledgers." & vbCrLf
+    If nMiss > 0 Then msg = msg & nMiss & " entr" & IIf(nMiss = 1, "y was", "ies were") & " not found (already changed or deleted in Tally)." & vbCrLf
+    Notify msg & "Check them, then click Update in Tally.", IIf(nUnknown + nMiss > 0, "warn", "ok")
+    Exit Sub
+fail:
+    msg = Err.Description
+    On Error Resume Next
+    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    ThisWorkbook.Activate
+    Application.ScreenUpdating = True
+    ProgressHide
+    MsgBox "The file could not be read: " & msg, vbExclamation, APP_NAME
+End Sub
+
+'---------------- pop-up windows (built once inside this file) ----------------
+Private Function FormExists(ByVal nm As String) As Boolean
+    Dim c As Object
+    On Error Resume Next
+    Set c = ThisWorkbook.VBProject.VBComponents(nm)
+    FormExists = Not c Is Nothing
+End Function
+
+Private Function FormReady(ByVal nm As String) As Boolean
+    If FormExists(nm) And CStr(AppData().Range("B18").Value) = FORMS_VER Then FormReady = True: Exit Function
+    FormReady = BuildForms()
+    If FormReady Then FormReady = FormExists(nm)
+End Function
+
+Public Sub BuildFormsQuiet()
+    BuildForms
+End Sub
+
+Private Function AddCtl(frm As Object, ByVal progId As String, ByVal nm As String, ByVal l As Single, ByVal t As Single, _
+        ByVal w As Single, ByVal h As Single, Optional ByVal cap As String = "") As Object
+    Dim c As Object
+    Set c = frm.Designer.Controls.Add(progId)
+    c.Name = nm
+    c.Left = l: c.Top = t: c.Width = w: c.Height = h
+    On Error Resume Next
+    c.Font.Name = "Segoe UI"
+    c.Font.Size = 9
+    If cap <> "" Then c.Caption = cap
+    Set AddCtl = c
+End Function
+
+' Creates the two small windows (needs "Trust access to the VBA project object model", same as updates)
+Private Function BuildForms() As Boolean
+    Dim vbp As Object, comp As Object, c As Object, cnt As Long, code As String
+    On Error Resume Next
+    Set vbp = ThisWorkbook.VBProject
+    cnt = vbp.VBComponents.Count
+    If Err.Number <> 0 Or cnt = 0 Then Exit Function
+    Err.Clear
+    ' remove old versions
+    vbp.VBComponents.Remove vbp.VBComponents("PfySend")
+    vbp.VBComponents.Remove vbp.VBComponents("PfyPwd")
+    Err.Clear
+    On Error GoTo fail
+    ' --- PfySend
+    Set comp = vbp.VBComponents.Add(3)
+    comp.Name = "PfySend"
+    comp.Properties("Caption").Value = APP_NAME & " - send the suspense file"
+    comp.Properties("Width").Value = 440
+    comp.Properties("Height").Value = 420
+    comp.Properties("BackColor").Value = RGB(244, 247, 251)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblHead", 14, 10, 400, 18, "Send the suspense file")
+    c.Font.Size = 11: c.Font.Bold = True: c.ForeColor = RGB(11, 31, 58)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblFile", 14, 30, 400, 16, "File ready")
+    c.ForeColor = RGB(100, 116, 139)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblTo", 14, 56, 100, 14, "Email to")
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtTo", 120, 52, 296, 20)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblMob", 14, 82, 100, 14, "WhatsApp mobile")
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtMob", 120, 78, 296, 20)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblSub", 14, 108, 100, 14, "Subject")
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtSub", 120, 104, 296, 20)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblMsg", 14, 134, 100, 14, "Message")
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtMsg", 120, 130, 296, 120)
+    c.MultiLine = True: c.EnterKeyBehavior = True: c.WordWrap = True: c.ScrollBars = 2
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnReset", 120, 256, 120, 20, "Use saved details")
+    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkDefault", 250, 256, 170, 20, "Save these as my default")
+    Set c = AddCtl(comp, "Forms.Label.1", "lblNote", 14, 282, 402, 30, "")
+    c.ForeColor = RGB(180, 83, 9): c.WordWrap = True
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnEmail", 14, 318, 128, 30, "Send Email")
+    c.BackColor = RGB(20, 184, 166): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnWa", 150, 318, 128, 30, "Send on WhatsApp")
+    c.BackColor = RGB(37, 211, 102): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnSave", 286, 318, 130, 30, "Save as...")
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnClose", 316, 356, 100, 22, "Close")
+    code = "Public Choice As String" & vbCrLf & _
+        "Private Sub btnEmail_Click()" & vbCrLf & "    Choice = ""email"": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
+        "Private Sub btnWa_Click()" & vbCrLf & "    Choice = ""wa"": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
+        "Private Sub btnSave_Click()" & vbCrLf & "    Choice = ""save"": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
+        "Private Sub btnClose_Click()" & vbCrLf & "    Choice = """": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
+        "Private Sub btnReset_Click()" & vbCrLf & "    txtTo.Text = txtTo.Tag: txtMob.Text = txtMob.Tag: txtSub.Text = txtSub.Tag: txtMsg.Text = txtMsg.Tag" & vbCrLf & "End Sub" & vbCrLf & _
+        "Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)" & vbCrLf & _
+        "    If CloseMode = 0 Then Cancel = True: Choice = """": Me.Hide" & vbCrLf & "End Sub"
+    comp.CodeModule.AddFromString code
+    ' --- PfyPwd
+    Set comp = vbp.VBComponents.Add(3)
+    comp.Name = "PfyPwd"
+    comp.Properties("Caption").Value = APP_NAME & " - mail password"
+    comp.Properties("Width").Value = 320
+    comp.Properties("Height").Value = 190
+    comp.Properties("BackColor").Value = RGB(244, 247, 251)
+    Set c = AddCtl(comp, "Forms.Label.1", "lblP", 14, 10, 284, 30, "Mail password")
+    c.WordWrap = True: c.ForeColor = RGB(11, 31, 58)
+    Set c = AddCtl(comp, "Forms.TextBox.1", "txtPwd", 14, 46, 284, 22)
+    c.PasswordChar = "*"
+    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkShow", 14, 74, 140, 18, "Show password")
+    Set c = AddCtl(comp, "Forms.CheckBox.1", "chkRem", 160, 74, 150, 18, "Remember this password")
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnOK", 118, 110, 86, 26, "Send")
+    c.BackColor = RGB(20, 184, 166): c.ForeColor = RGB(255, 255, 255): c.Font.Bold = True: c.Default = True
+    Set c = AddCtl(comp, "Forms.CommandButton.1", "btnCancel", 212, 110, 86, 26, "Cancel")
+    c.Cancel = True
+    code = "Public Choice As String" & vbCrLf & _
+        "Private Sub chkShow_Click()" & vbCrLf & "    If chkShow.Value Then txtPwd.PasswordChar = """" Else txtPwd.PasswordChar = ""*""" & vbCrLf & "End Sub" & vbCrLf & _
+        "Private Sub btnOK_Click()" & vbCrLf & "    Choice = ""ok"": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
+        "Private Sub btnCancel_Click()" & vbCrLf & "    Choice = """": Me.Hide" & vbCrLf & "End Sub" & vbCrLf & _
+        "Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)" & vbCrLf & _
+        "    If CloseMode = 0 Then Cancel = True: Choice = """": Me.Hide" & vbCrLf & "End Sub"
+    comp.CodeModule.AddFromString code
+    SetApp "A18", "Pop-up windows version"
+    SetApp "B18", FORMS_VER
+    BuildForms = True
+    Exit Function
+fail:
+    BuildForms = False
+End Function
+
+'---------------- one-time setup of v2.3 ----------------
+Private Sub ApplyLayout230()
+    Dim st As Worksheet, fx As Worksheet, hl As Worksheet, shp As Object, rg As Range, r As Long, i As Long, items As Variant, f As Range
+    On Error Resume Next
+    If CStr(AppData().Range("B19").Value) = "2.3.0" Then Exit Sub
+    ' Settings: Email & WhatsApp block
+    Set st = ThisWorkbook.Worksheets("Settings")
+    st.Range("A3:C3").Copy Destination:=st.Range("A18:C18")
+    st.Range("A18").Value = "Email & WhatsApp": st.Range("B18").Value = "Your value": st.Range("C18").Value = "Used by Change Ledger > Make suspense file"
+    items = Array( _
+        Array("MailFrom", "Your email (sender)", "", "The suspense file is sent from this mailbox. Gmail, Yahoo, Zoho and Rediff are set up automatically."), _
+        Array("MailServer", "Mail server (SMTP)", "", "Filled automatically for Gmail / Yahoo / Zoho / Rediff. Company mail: ask your mail provider (e.g. smtp.yourdomain.com)."), _
+        Array("MailPort", "Port", "", "Usually 465 (secure). Filled automatically with the server."), _
+        Array("MailSSL", "Secure connection (SSL)", "Yes", "Keep Yes."), _
+        Array("MailRemember", "Remember mail password", "Yes", "Yes = typed once and kept in this file. No = asked at every send (safer on a shared file). Gmail / Yahoo need an App password."), _
+        Array("SendToEmail", "Send suspense file to (email)", "", "Saved recipient; you can change it in the pop-up for each send."), _
+        Array("SendToMobile", "Send on WhatsApp to (mobile)", "", "10-digit mobile (91 is added). You can change it in the pop-up."), _
+        Array("SendSubject", "Email subject", "Suspense entries {period} - please confirm the ledgers", "{period}, {count} and {company} are filled in automatically."), _
+        Array("SendMessage", "Message (email & WhatsApp)", "Dear Sir/Madam," & vbLf & vbLf & "Please find attached {count} bank entries kept in Suspense in our books for {period}." & vbLf & _
+            "Kindly select the correct ledger for each entry in the yellow column (dropdown), add remarks where needed, and send the file back." & vbLf & vbLf & "Regards," & vbLf & "{company}", _
+            "Text of the email / WhatsApp message."))
+    For i = 0 To UBound(items)
+        r = 19 + i
+        st.Range("A13:C13").Copy Destination:=st.Range("A" & r & ":C" & r)
+        st.Cells(r, 1).Value = items(i)(1)
+        If CellText(st.Cells(r, 2).Value) = "" Or st.Cells(r, 2).Value = st.Range("B13").Value Then st.Cells(r, 2).Value = items(i)(2)
+        st.Cells(r, 3).Value = items(i)(3)
+        ThisWorkbook.Names.Add Name:=items(i)(0), RefersTo:="=Settings!$B$" & r
+    Next i
+    st.Range("B27").WrapText = True: st.Rows(27).RowHeight = 110
+    st.Range("B26").WrapText = True
+    For i = 22 To 23
+        st.Cells(i, 2).Validation.Delete
+        st.Cells(i, 2).Validation.Add Type:=3, AlertStyle:=1, Operator:=1, Formula1:="Yes,No"
+    Next i
+    ' Change Ledger: two new buttons
+    Set fx = FxSheet()
+    For Each shp In fx.Shapes
+        If shp.Name = "cl_mkfile" Or shp.Name = "cl_import" Then shp.Delete
+    Next shp
+    Set rg = fx.Range("I4")
+    Set shp = NewBox(fx, "cl_mkfile", 1, rg.Left + 1, rg.Top + 1, rg.Width - 2, rg.Height - 2, RGB(20, 184, 166))
+    StyleText shp, ChrW(&H2709) & "  Make suspense file", 10, RGB(255, 255, 255), True, 2
+    shp.TextFrame2.VerticalAnchor = 3: shp.OnAction = "TallyLink.MakeSuspenseFile": shp.Placement = 1
+    Set rg = fx.Range("J4")
+    Set shp = NewBox(fx, "cl_import", 1, rg.Left + 1, rg.Top + 1, rg.Width - 2, rg.Height - 2, RGB(230, 250, 246))
+    StyleText shp, ChrW(&H21E9) & "  Import filled suspense file", 10, RGB(15, 118, 110), True, 2
+    shp.TextFrame2.VerticalAnchor = 3: shp.OnAction = "TallyLink.ImportFilledSuspense": shp.Placement = 1
+    ' Help section
+    Set hl = ThisWorkbook.Worksheets("Help")
+    Set f = hl.Columns(2).Find(What:="Suspense file by Email / WhatsApp", LookIn:=-4163, LookAt:=1)
+    If f Is Nothing Then
+        items = Array( _
+            "Change Ledger > Make suspense file: an Excel of all Suspense entries (Change Ledger From / To dates) with a yellow 'Correct Ledger' dropdown of every ledger and a Remarks column. A pop-up then offers Send Email, Send on WhatsApp or Save as.", _
+            "Send Email sends from your own mailbox (Settings > Email & WhatsApp). Gmail / Yahoo: turn on 2-Step Verification in your account and create an 'App password' (16 letters) - use that, not your normal password. Company mail: fill Mail server and Port.", _
+            "Outlook / Hotmail / Microsoft 365 may not allow sending from here - use WhatsApp. WhatsApp opens with the message typed in and the file's folder open: drag the file into the chat and press Send.", _
+            "When the file comes back: Change Ledger > Import filled suspense file. The chosen ledgers go into the yellow column - check them and click Update in Tally.")
+        r = hl.Cells(hl.Rows.Count, 2).End(xlUp).Row + 3
+        hl.Cells(r, 2).Value = "Suspense file by Email / WhatsApp"
+        With hl.Cells(r, 2)
+            .Font.Bold = True: .Font.Size = 13: .Font.Color = RGB(11, 31, 58): .VerticalAlignment = -4107
+        End With
+        hl.Rows(r).RowHeight = 26
+        For i = 0 To UBound(items)
+            With hl.Cells(r + 1 + i, 2)
+                .Value = items(i)
+                .WrapText = True: .VerticalAlignment = -4160: .IndentLevel = 1
+                .Interior.Color = RGB(255, 255, 255): .Font.Color = RGB(30, 41, 59): .Font.Size = 10
+            End With
+            hl.Rows(r + 1 + i).RowHeight = 16 * (Len(items(i)) \ 120 + 1) + 8
+        Next i
+        GridBorders hl.Range(hl.Cells(r + 1, 2), hl.Cells(r + 1 + UBound(items), 2))
+    End If
+    SetApp "A19", "Layout 2.3.0"
+    SetApp "B19", "2.3.0"
+End Sub
+
+' Shown once after the update (after What's new > Got it)
+Private Sub MailIntro()
+    Dim a As VbMsgBoxResult
+    SetApp "A17", "Mail intro shown"
+    SetApp "B17", Format$(Now, "dd-mm-yyyy")
+    a = MsgBox("New: send your Suspense entries as an Excel file" & vbCrLf & vbCrLf & _
+        "Change Ledger > Make suspense file creates an Excel of all Suspense entries with a ledger dropdown. " & _
+        "Send it by Email or WhatsApp, or Save as. When it comes back filled, Import filled suspense file puts the ledgers into Change Ledger." & vbCrLf & vbCrLf & _
+        "Email setup (one time, Settings > Email & WhatsApp):" & vbCrLf & _
+        "  - Enter your email. Gmail, Yahoo, Zoho and Rediff are set up automatically; company mail needs the mail server." & vbCrLf & _
+        "  - Gmail / Yahoo need an 'App password': your account > Security > turn on 2-Step Verification > App passwords > create one and use its 16 letters." & vbCrLf & _
+        "  - Outlook / Hotmail may not allow sending from here: WhatsApp is recommended." & vbCrLf & vbCrLf & _
+        "Should Postify remember your mail password after you type it once?" & vbCrLf & _
+        "Yes = remember it      No = ask me every time" & vbCrLf & "(You can change this later on the Settings sheet.)", vbYesNo + vbQuestion, APP_NAME & " - Suspense file")
+    SetSetting "MailRemember", IIf(a = vbYes, "Yes", "No")
+    If Not FormExists("PfySend") Then BuildForms
+    If MsgBox("Open Settings now to enter your email and the person's email / WhatsApp number?", vbYesNo + vbQuestion, APP_NAME) = vbYes Then
+        GoSheet "Settings", "B19"
+    End If
 End Sub

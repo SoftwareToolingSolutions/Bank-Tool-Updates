@@ -1,3 +1,5 @@
-2.2.3
+2.3.0
+New: Suspense file - one click makes an Excel of your Suspense entries with a ledger dropdown for every entry
+Send it by Email or WhatsApp straight from Postify, or Save as
+Import the filled file back into Change Ledger
 Minor bug fixes
-New: Dark mode - switch the dashboard between light and dark with the button at the top right of Home
